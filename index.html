@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JAPANESE STATION — TACTICAL FPS</title>
+<link rel="stylesheet" href="./css/style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="game-canvas"></canvas>
+
+<div id="vignette"></div>
+<div id="damage-flash"></div>
+
+<!-- ============ HUD ============ -->
+<div id="hud" class="hidden">
+  <div id="crosshair">
+    <span class="ch ch-t"></span><span class="ch ch-b"></span>
+    <span class="ch ch-l"></span><span class="ch ch-r"></span>
+    <span class="ch-dot"></span>
+  </div>
+  <div id="hitmarker"><span class="hm hm-a"></span><span class="hm hm-b"></span><span class="hm hm-c"></span><span class="hm hm-d"></span></div>
+  <div id="reload-ind">RELOADING<span class="reload-dots"></span></div>
+
+  <div id="hud-ammo">
+    <div id="ammo-line"><span id="ammo-mag">30</span><span id="ammo-sep"> / </span><span id="ammo-reserve">120</span></div>
+    <div id="ammo-weapon">AR-15 ASSAULT</div>
+  </div>
+
+  <div id="hud-hp">
+    <div id="hp-label">HP <span id="hp-num">100</span></div>
+    <div id="hp-bar"><div id="hp-fill"></div></div>
+  </div>
+
+  <div id="hud-targets">
+    <div><span id="targets-label">TARGETS</span><span id="targets-count">5</span></div>
+    <div id="wave-ind">WAVE 1/2</div>
+  </div>
+
+  <div id="wave-alert"></div>
+  <div id="hs-layer"></div>
+  <div id="water-tint"></div>
+  <div id="emp-flash"></div>
+
+  <div id="killfeed"></div>
+
+  <div id="mission-banner">
+    <div class="mb-1">MISSION 01</div>
+    <div class="mb-2">SECURE THE STATION</div>
+    <div class="mb-3">Eliminate all hostile targets.</div>
+  </div>
+</div>
+
+<!-- ============ DEBUG ============ -->
+<div id="debug">
+  <div>FPS: <span id="d-fps">--</span></div>
+  <div>DRAW CALLS: <span id="d-calls">--</span></div>
+  <div>TRIANGLES: <span id="d-tris">--</span></div>
+  <div>PARTICLES: <span id="d-parts">--</span></div>
+  <div>QUALITY: <span id="d-quality">HIGH</span></div>
+  <div id="d-hint">[F3] toggle · [1/2/3] weapon · [M] mute</div>
+</div>
+
+<!-- ============ PAUSE ============ -->
+<div id="pause-screen" class="overlay hidden">
+  <div class="panel panel-center">
+    <div class="ps-title">PAUSED</div>
+    <div class="ps-sub">セッション一時停止</div>
+    <label class="q-label">GRAPHICS QUALITY
+      <select id="pause-quality" class="q-select">
+        <option value="LOW">LOW</option>
+        <option value="MEDIUM">MEDIUM</option>
+        <option value="HIGH" selected>HIGH</option>
+        <option value="ULTRA">ULTRA</option>
+      </select>
+    </label>
+    <div class="ps-hint">CLICK TO RESUME</div>
+  </div>
+</div>
+
+<!-- ============ VICTORY ============ -->
+<div id="victory" class="overlay hidden">
+  <div class="panel panel-center">
+    <div class="v-title" id="v-title">MISSION COMPLETE</div>
+    <div class="v-sub" id="v-sub">STATION SECURED — 駅制圧完了</div>
+    <div class="v-stats">
+      <div class="v-stat"><span class="v-k">KILLS</span><span class="v-v" id="v-kills">5</span></div>
+      <div class="v-stat"><span class="v-k">ACCURACY</span><span class="v-v" id="v-accuracy">0%</span></div>
+      <div class="v-stat"><span class="v-k">TIME</span><span class="v-v" id="v-time">00:00</span></div>
+    </div>
+    <div class="ps-hint" id="v-hint">CLICK TO RESTART</div>
+  </div>
+</div>
+
+<!-- ============ START ============ -->
+<div id="start-screen" class="overlay hidden">
+  <div class="panel panel-start">
+    <div class="s-jp">桜見台駅 · SAKURADAI STATION</div>
+    <div class="s-title">JAPANESE STATION</div>
+    <div class="s-sub">TACTICAL FPS</div>
+    <div class="s-divider"></div>
+    <div class="s-controls">
+      <span><b>WASD</b> MOVE</span><span><b>SHIFT</b> SPRINT</span><span><b>SPACE</b> JUMP</span>
+      <span><b>CTRL</b> CROUCH</span><span><b>LMB</b> FIRE</span><span><b>R</b> RELOAD</span>
+      <span><b>1 / 2 / 3</b> WEAPON</span><span><b>F3</b> DEBUG</span><span><b>ESC</b> UNLOCK</span>
+    </div>
+    <label class="q-label">GRAPHICS QUALITY
+      <select id="start-quality" class="q-select">
+        <option value="LOW">LOW</option>
+        <option value="MEDIUM">MEDIUM</option>
+        <option value="HIGH" selected>HIGH</option>
+        <option value="ULTRA">ULTRA</option>
+      </select>
+    </label>
+    <div class="s-start">CLICK TO START</div>
+    <div class="s-mission">15-SECTOR CAMPAIGN · MISSION 01 SECURE THE CONCOURSE · HOSTILES ARRIVE IN WAVES</div>
+  </div>
+</div>
+
+<!-- ============ LOADING ============ -->
+<div id="loading" class="overlay">
+  <div class="panel panel-load">
+    <div class="l-title">LOADING STATION...</div>
+    <div class="l-bar-wrap"><div class="l-bar" id="l-bar"></div></div>
+    <div class="l-row"><span id="l-step">Booting renderer</span><span id="l-pct">0%</span></div>
+    <div class="l-items" id="l-items"></div>
+    <div class="l-jp">駅を読み込んでいます…</div>
+  </div>
+</div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>

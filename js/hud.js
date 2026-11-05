@@ -1,0 +1,217 @@
+// ============================================================
+// hud.js — DOM HUD controller (modern minimal FPS UI).
+// Crosshair, hit marker, ammo, HP, target counter, kill feed,
+// mission banner, damage flash, reload indicator, victory screen.
+// ============================================================
+
+const $ = (id) => document.getElementById(id);
+
+export class HUD {
+  constructor() {
+    this.el = {
+      hud: $('hud'),
+      crosshair: $('crosshair'),
+      hitmarker: $('hitmarker'),
+      reload: $('reload-ind'),
+      mag: $('ammo-mag'),
+      reserve: $('ammo-reserve'),
+      ammoLine: $('ammo-line'),
+      weaponName: $('ammo-weapon'),
+      hpNum: $('hp-num'),
+      hpBar: $('hp-bar'),
+      hpFill: $('hp-fill'),
+      targets: $('targets-count'),
+      killfeed: $('killfeed'),
+      banner: $('mission-banner'),
+      damage: $('damage-flash'),
+      victory: $('victory'),
+      vTitle: $('v-title'),
+      vSub: $('v-sub'),
+      vHint: $('v-hint'),
+      vKills: $('v-kills'),
+      vAcc: $('v-accuracy'),
+      vTime: $('v-time'),
+      mb1: document.querySelector('#mission-banner .mb-1'),
+      mb2: document.querySelector('#mission-banner .mb-2'),
+      mb3: document.querySelector('#mission-banner .mb-3'),
+      wave: $('wave-ind'),
+      waveAlert: $('wave-alert'),
+      hsLayer: $('hs-layer'),
+      water: $('water-tint'),
+      emp: $('emp-flash'),
+    };
+    this._hitTO = null;
+  }
+
+  show() { this.el.hud.classList.remove('hidden'); }
+  hide() { this.el.hud.classList.add('hidden'); }
+
+  setAmmo(mag, reserve) {
+    this.el.mag.textContent = mag;
+    this.el.reserve.textContent = reserve;
+    this.el.ammoLine.classList.toggle('low', mag === 0);
+  }
+
+  setWeaponName(name) { this.el.weaponName.textContent = name; }
+
+  setHP(hp) {
+    this.el.hpNum.textContent = Math.ceil(hp);
+    this.el.hpFill.style.width = `${Math.max(0, hp)}%`;
+    this.el.hpBar.classList.toggle('low', hp < 35);
+    this.el.damage.classList.toggle('lowhp', hp < 30);
+  }
+
+  setTargets(n) { this.el.targets.textContent = n; }
+
+  /** "WAVE 2/3" tick under the target counter (mission wave plan). */
+  setWave(info) {
+    if (!this.el.wave) return;
+    this.el.wave.textContent = `WAVE ${info.current}/${info.total}`;
+    this.el.wave.classList.toggle('done', info.total === 1);
+  }
+
+  /** Reinforcement dropped in — brief center-screen warning. */
+  waveAlert(info) {
+    const el = this.el.waveAlert;
+    if (!el) return;
+    el.textContent = `⚠ REINFORCEMENTS · 増援確認 — WAVE ${info.current}/${info.total}`;
+    el.classList.remove('show');
+    void el.offsetWidth;
+    el.classList.add('show');
+  }
+
+  /** Salvage grabbed — brief center-screen confirmation. */
+  pickupToast(text) {
+    const el = this.el.waveAlert;
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove('show');
+    void el.offsetWidth;
+    el.classList.add('show');
+  }
+
+  /** Player was overrun / fell — explains the sudden teleport to the entry. */
+  respawnAlert(kind = 'entry') {
+    const el = this.el.waveAlert;
+    if (!el) return;
+    el.textContent = kind === 'fall'
+      ? '↧ FELL OFF THE DECK — BACK TO ENTRY · 再配置'
+      : '↑ OVERRUN — FELL BACK TO SECTOR ENTRY · 再集結';
+    el.classList.remove('show');
+    void el.offsetWidth;
+    el.classList.add('show');
+  }
+
+  /**
+   * Create a small floating tag; the game loop projects it over the
+   * enemy head and fades it (see game.js _updateHSPops).
+   */
+  headshotPop() {
+    const el = document.createElement('div');
+    el.className = 'hs-pop';
+    el.innerHTML = 'HEADSHOT <span class="hs-x">+2×</span>';
+    this.el.hsLayer.appendChild(el);
+    return el;
+  }
+
+  setFiring(on) { this.el.crosshair.classList.toggle('firing', on); }
+
+  hitMarker(headshot) {
+    const hm = this.el.hitmarker;
+    hm.classList.toggle('headshot', !!headshot);
+    hm.classList.remove('show');
+    void hm.offsetWidth;              // restart CSS animation
+    hm.classList.add('show');
+  }
+
+  reloading(on) { this.el.reload.classList.toggle('show', on); }
+
+  killFeed(headshot) {
+    const row = document.createElement('div');
+    row.className = 'kf-row';
+    row.innerHTML = headshot
+      ? 'HEADSHOT <span class="kf-head">✕ ELIMINATED</span>'
+      : 'ENEMY <span class="kf-head">✕ ELIMINATED</span>';
+    this.el.killfeed.prepend(row);
+    while (this.el.killfeed.children.length > 4) this.el.killfeed.lastChild.remove();
+    setTimeout(() => {
+      row.style.transition = 'opacity .4s';
+      row.style.opacity = '0';
+      setTimeout(() => row.remove(), 420);
+    }, 2200);
+  }
+
+  flashDamage() {
+    const d = this.el.damage;
+    d.classList.add('hit');
+    setTimeout(() => d.classList.remove('hit'), 90);
+  }
+
+  /** Underwater missions: a permanent blue tint + caustic-ish vignette. */
+  waterToggle(on) { if (this.el.water) this.el.water.classList.toggle('on', on); }
+
+  /** EMP pulse: HUD glitches (scanlines/jitter) while the overlay is on. */
+  empGlitch(on) {
+    if (this.el.emp) this.el.emp.classList.toggle('on', on);
+    if (this.el.hud) this.el.hud.classList.toggle('emp-glitch', on);
+  }
+
+  /** Fill the in-world banner with mission text (call before missionBanner). */
+  setMission(m) {
+    this.el.mb1.textContent = m.name1;
+    this.el.mb2.textContent = m.name2;
+    this.el.mb3.textContent = `${m.desc} — ${m.jp}`;
+  }
+
+  missionBanner() {
+    const b = this.el.banner;
+    b.classList.remove('show');
+    void b.offsetWidth;
+    b.classList.add('show');
+  }
+
+  /** Non-final mission end: same overlay, "continue" framing. The window
+   *  dismisses itself (game.js arms the actual advance); `autoSec` drives
+   *  the countdown shown in the hint. Clicking only skips the countdown. */
+  showIntermission(done, next, kills, accuracy, timeStr, autoSec = 0) {
+    this.showVictory(kills, accuracy, timeStr);
+    this.el.vTitle.textContent = `${done.name1} COMPLETE`;
+    this.el.vSub.textContent = `${done.name2} — SECURED · NEXT: ${next.name1} · ${next.name2}`;
+    clearInterval(this._countTO);
+    this._countTO = 0;
+    if (autoSec > 0) {
+      let n = autoSec;
+      const tick = () => {
+        this.el.vHint.textContent = n > 0
+          ? `AUTO-CONTINUE IN ${n} · CLICK TO SKIP`
+          : 'CONTINUING…';
+      };
+      tick();
+      this._countTO = setInterval(() => {
+        n -= 1;
+        if (n < 0) { clearInterval(this._countTO); this._countTO = 0; return; }
+        tick();
+      }, 1000);
+    } else {
+      this.el.vHint.textContent = 'CLICK TO CONTINUE';
+    }
+  }
+
+  showVictory(kills, accuracy, timeStr, isFinal = false) {
+    this.el.vTitle.textContent = isFinal ? 'CAMPAIGN COMPLETE' : 'MISSION COMPLETE';
+    this.el.vSub.textContent = isFinal
+      ? 'ALL FIFTEEN SECTORS SECURED — 全作戦完了・桜見台駅制圧'
+      : 'SECTOR SECURED — 区域制圧完了';
+    this.el.vHint.textContent = 'CLICK TO RESTART';
+    this.el.vKills.textContent = kills;
+    this.el.vAcc.textContent = `${accuracy}%`;
+    this.el.vTime.textContent = timeStr;
+    this.el.victory.classList.remove('hidden');
+  }
+
+  hideVictory() {
+    clearInterval(this._countTO);
+    this._countTO = 0;
+    this.el.victory.classList.add('hidden');
+  }
+}
