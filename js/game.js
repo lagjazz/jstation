@@ -341,14 +341,43 @@ export class Game {
   // quality change moves the shadow map, pixel ratio and light-pool size, and
   // each of those re-keys every program: warmed here, none of that lands as a
   // freeze in the first minutes of a run.
+  /** TEX and MAT are lazy memoized registries: a texture's canvas drawing, its
+   *  GPU upload and (for MeshPhysicalMaterial) its program variant are paid on
+   *  FIRST use — muzzleFlash/spark/smoke/shard/bulletHole in the first
+   *  firefight, signage when a sign first enters view. Touch every getter so
+   *  none of that lands mid-fight. */
+  _warmRegistries() {
+    const t0 = performance.now();
+    let touched = 0;
+    for (const reg of [TEX, MAT]) {
+      const seen = new Set();
+      for (let o = reg; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+        for (const key of Object.getOwnPropertyNames(o)) {
+          if (seen.has(key) || key === 'constructor') continue;
+          seen.add(key);
+          if (typeof Object.getOwnPropertyDescriptor(o, key)?.get === 'function') { void reg[key]; touched++; }
+        }
+      }
+    }
+    return { touched, ms: Math.round(performance.now() - t0) };
+  }
+
   _prewarmMaterials() {
+    const t0 = performance.now();
+    const registries = this._warmRegistries();
     const undoWarm = this._warmUpEntities();
     const hidden = [];
     this.scene.traverse((o) => { if (!o.visible) { o.visible = true; hidden.push(o); } });
+    const tc = performance.now();
     this.renderer.compile(this.scene, this.camera);
     this.composer.render();
+    const compileMs = Math.round(performance.now() - tc);
     for (const o of hidden) o.visible = false;
     undoWarm();
+    // What startup actually costs, per phase: readable here (window.__bootTimings)
+    // so a stall on a real GPU can be traced to a phase instead of guessed at.
+    window.__bootTimings = { registries, compileRender: compileMs, total: Math.round(performance.now() - t0) };
+    console.log(`[warm] ${registries.touched} lazy textures/materials in ${registries.ms} ms; compile+render ${compileMs} ms`);
   }
 
   // Every hostile class and every drop builds its own meshes, materials and
