@@ -102,6 +102,18 @@ export class HUD {
     el.classList.add('show');
   }
 
+  /** HP hit zero — a short card that says what happened before the
+   *  respawn at the mission entry, so the teleport is never a mystery. */
+  showDowned() {
+    const el = document.getElementById('downed-card');
+    if (!el) return;
+    clearTimeout(this._downTO);
+    el.classList.remove('hidden', 'show');
+    void el.offsetWidth;
+    el.classList.add('show');
+    this._downTO = setTimeout(() => el.classList.add('hidden'), 2800);
+  }
+
   /**
    * Create a small floating tag; the game loop projects it over the
    * enemy head and fades it (see game.js _updateHSPops).
@@ -175,6 +187,7 @@ export class HUD {
    *  the countdown shown in the hint. Clicking only skips the countdown. */
   showIntermission(done, next, kills, accuracy, timeStr, autoSec = 0) {
     this.showVictory(kills, accuracy, timeStr);
+    this.el.victory.classList.add('live');   // non-blocking: world keeps moving
     this.el.vTitle.textContent = `${done.name1} COMPLETE`;
     this.el.vSub.textContent = `${done.name2} — SECURED · NEXT: ${next.name1} · ${next.name2}`;
     clearInterval(this._countTO);
@@ -183,7 +196,7 @@ export class HUD {
       let n = autoSec;
       const tick = () => {
         this.el.vHint.textContent = n > 0
-          ? `AUTO-CONTINUE IN ${n} · CLICK TO SKIP`
+          ? `AUTO-CONTINUE IN ${n} · 可自由活动`
           : 'CONTINUING…';
       };
       tick();
@@ -198,6 +211,7 @@ export class HUD {
   }
 
   showVictory(kills, accuracy, timeStr, isFinal = false) {
+    this.el.victory.classList.remove('live');
     this.el.vTitle.textContent = isFinal ? 'CAMPAIGN COMPLETE' : 'MISSION COMPLETE';
     this.el.vSub.textContent = isFinal
       ? 'ALL FIFTEEN SECTORS SECURED — 全作戦完了・桜見台駅制圧'

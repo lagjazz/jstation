@@ -112,7 +112,7 @@ export const MISSIONS = [
     roster: ['rifle', 'rusher', 'marksman', 'stalker'],
     area: 'cyber',
     spawn: { x: -127, z: -14, yaw: -Math.PI / 2 },
-    atmo: { fogNear: 24, fogFar: 140, moon: 0.5, bg: 'neon' },
+    atmo: { fogNear: 24, fogFar: 140, moon: 0.5, bg: 'neon', bloom: 0.55 },
   },
   {
     name1: 'MISSION 05',
@@ -136,8 +136,9 @@ export const MISSIONS = [
     waves: [3, 3, 2],
     roster: ['rifle', 'breacher', 'heavy'],
     area: 'tomb',
-    spawn: { x: -20, z: -70, yaw: Math.PI },
+    spawn: { x: -20, z: -70, yaw: -2.0 },
     atmo: { fogNear: 16, fogFar: 95, moon: 0.3, bg: 'dark' },
+    mods: { traps: true },
   },
   {
     name1: 'MISSION 07',
@@ -148,8 +149,8 @@ export const MISSIONS = [
     waves: [2, 3, 3],
     roster: ['rifle', 'marksman', 'stalker'],
     area: 'skyport',
-    spawn: { x: 47, z: -3, yaw: -Math.PI / 2 },
-    atmo: { fogNear: 28, fogFar: 180, moon: 1.35, bg: 'cloud' },
+    spawn: { x: 47, z: -4, yaw: -Math.PI / 2 },
+    atmo: { fogNear: 20, fogFar: 150, moon: 1.45, bg: 'cloud' },
   },
   {
     name1: 'MISSION 08',
@@ -176,7 +177,7 @@ export const MISSIONS = [
     area: 'atlantis',
     spawn: { x: -127, z: 40, yaw: -Math.PI / 2 },
     atmo: { fogNear: 12, fogFar: 85, moon: 0.45, bg: 'deep' },
-    mods: { gravityScale: 0.5, jumpScale: 0.9, speedScale: 0.88, underwater: true, gapScale: 1.35 },
+    mods: { gravityScale: 0.5, jumpScale: 0.9, speedScale: 0.88, underwater: true, gapScale: 1.35, currents: true },
     elite: true,
   },
   // ---- MISSIONS 10–15: the six moremaps2.md worlds (js/newAreas2.js) ----
@@ -189,8 +190,11 @@ export const MISSIONS = [
     waves: [3, 3, 3],
     roster: ['rifle', 'marksman', 'flamer'],
     area: 'ice',
-    spawn: { x: 146, z: -55, yaw: Math.PI },
-    atmo: { fogNear: 22, fogFar: 140, moon: 1.3, bg: 'aurora' },
+    // spawn on the frozen-sea side, three-quarter view of the icebreaker
+    // with both glacier ridges clipped into frame edges (audit: pulled in
+    // from 122,-22 so the hull reads larger without touching the flank)
+    spawn: { x: 144, z: -16, yaw: -0.8 },
+    atmo: { fogNear: 24, fogFar: 150, moon: 1.3, bg: 'aurora' },
     mods: { ice: true, gapScale: 1.15 },
   },
   {
@@ -227,8 +231,10 @@ export const MISSIONS = [
     waves: [3, 3, 4],
     roster: ['rifle', 'marksman', 'breacher', 'juggernaut'],
     area: 'canyon',
-    spawn: { x: -235, z: 66, yaw: -Math.PI / 2 },
-    atmo: { fogNear: 26, fogFar: 160, moon: 0.85, bg: 'rust', farClip: 168 },
+    // flank shot: wreck line + mid breach glow + sun off the nozzles all
+    // read the moment the mission starts
+    spawn: { x: -220, z: 46, yaw: -2.64 },
+    atmo: { fogNear: 26, fogFar: 175, moon: 0.9, bg: 'rust', farClip: 235, bloom: 0.5 },
     mods: { sandstorm: true },
   },
   {
@@ -240,7 +246,7 @@ export const MISSIONS = [
     waves: [3, 4, 4],
     roster: ['rifle', 'phantom', 'flamer', 'stalker'],
     area: 'aquarium',
-    spawn: { x: 185, z: 46, yaw: -Math.PI / 2 },
+    spawn: { x: 185, z: 46, yaw: -1.31 },
     atmo: { fogNear: 28, fogFar: 150, moon: 0.7, bg: 'aqua', bloom: 0.5 },
     mods: { zeroG: true, gravityScale: 0.3, gapScale: 1.25 },
   },
@@ -254,7 +260,8 @@ export const MISSIONS = [
     roster: ['rifle', 'heavy', 'marksman', 'bombardier', 'juggernaut', 'phantom'],
     area: 'clockwork',
     spawn: { x: 185, z: -34, yaw: -Math.PI / 2 },
-    atmo: { fogNear: 24, fogFar: 155, moon: 0.8, bg: 'brass' },
+    atmo: { fogNear: 18, fogFar: 120, fogColor: 0x241606, moon: 0.8, bg: 'brass', bloom: 0.45 },
+    mods: { gears: true, hazards: true },
     elite: true,
   },
 ];

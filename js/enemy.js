@@ -847,12 +847,14 @@ export class EnemyManager {
     for (let i = 0; i < n; i++) {
       const anchorIdx = fresh.length ? fresh.shift() : Math.floor(Math.random() * pool.length);
       const def = pool[anchorIdx];
-      const [x, z] = this._freeSpot(def.pos[0] + rand(-1.4, 1.4), def.pos[1] + rand(-1.4, 1.4));
+      const ey = def.y ?? 0;      // optional elevated home layer (canopy boardwalks)
+      const [x, z] = this._freeSpot(def.pos[0] + rand(-1.4, 1.4), def.pos[1] + rand(-1.4, 1.4), ey);
       const wps = def.wps.map(([wx, wz]) => [wx + rand(-1, 1), wz + rand(-1, 1)]);
       const e = new Enemy(this.enemies.length, this.scene, this.gltfScene, wps, {
         elite: this._elite, cls: bag[i % bag.length],
       });
-      e.group.position.set(x, 0, z);
+      e.group.position.set(x, ey, z);
+      e.anchorY = ey;
       e.group.rotation.y = rand(0, Math.PI * 2);
       e.wpIndex = Math.floor(Math.random() * wps.length);
       e.anchorIdx = anchorIdx;
@@ -860,30 +862,30 @@ export class EnemyManager {
       this.hitMeshes.push(...e.hitMeshes);
       if (ctx) {
         // small "inbound" poof at each insertion point
-        ctx.particles.dustPuff(x, 0.3, z, 5);
-        ctx.particles.smokePuff(x, 1.1, z, 2, 0.35);
+        ctx.particles.dustPuff(x, ey + 0.3, z, 5);
+        ctx.particles.smokePuff(x, ey + 1.1, z, 2, 0.35);
       }
     }
     this._waveIdx++;
   }
 
-  _freeSpot(x, z) {
+  _freeSpot(x, z, ey = 0) {
     // jittered pick first, then a golden-angle spiral until clear of colliders
     for (let k = 0; k < 26; k++) {
       const a = k * 2.39996;
       const r = k === 0 ? 0 : 0.45 + k * 0.28;
       const px = x + Math.cos(a) * r;
       const pz = z + Math.sin(a) * r;
-      if (!this._blocked(px, pz)) return [px, pz];
+      if (!this._blocked(px, pz, ey)) return [px, pz];
     }
     return [x, z];
   }
 
-  _blocked(x, z) {
+  _blocked(x, z, ey = 0) {
     for (const b of this.world.all()) {
       if (x + 0.45 > b.min.x && x - 0.45 < b.max.x &&
           z + 0.45 > b.min.z && z - 0.45 < b.max.z &&
-          b.min.y < 1.7 && b.max.y > 0.05) return true;
+          b.min.y < ey + 1.7 && b.max.y > ey + 0.05) return true;
     }
     return false;
   }
@@ -946,10 +948,12 @@ export class EnemyManager {
       } else {
         for (const b of this.world.all()) {
           // margin 0.2 sits inside the 0.34 slide radius, so enemies
-          // leaning on a wall are NOT flagged — only genuine embedding is
+          // leaning on a wall are NOT flagged — only genuine embedding is.
+          // The y-band follows the enemy's own level (boardwalk anchors).
+          const py = e.anchorY ?? 0;
           if (p.x > b.min.x - 0.2 && p.x < b.max.x + 0.2 &&
               p.z > b.min.z - 0.2 && p.z < b.max.z + 0.2 &&
-              b.min.y < 1.7 && b.max.y > 0.3) { bad = true; break; }
+              b.min.y < py + 1.7 && b.max.y > py + 0.3) { bad = true; break; }
         }
       }
       if (bad) this._respawnStuck(e, ctx);
@@ -964,15 +968,17 @@ export class EnemyManager {
     const fresh = shuffle(pool.map((_, i) => i).filter((i) => !used.has(i)));
     const anchorIdx = fresh.length ? fresh.shift() : Math.floor(Math.random() * pool.length);
     const def = pool[anchorIdx];
-    const [x, z] = this._freeSpot(def.pos[0] + rand(-1.2, 1.2), def.pos[1] + rand(-1.2, 1.2));
-    e.group.position.set(x, 0, z);
+    const ey = def.y ?? 0;
+    const [x, z] = this._freeSpot(def.pos[0] + rand(-1.2, 1.2), def.pos[1] + rand(-1.2, 1.2), ey);
+    e.group.position.set(x, ey, z);
+    e.anchorY = ey;
     e.knock.set(0, 0, 0);
     e.anchorIdx = anchorIdx;
     e.wpIndex = Math.floor(Math.random() * e.waypoints.length);
     if (e.state === ESTATE.CHASE || e.state === ESTATE.ATTACK) e.state = ESTATE.PATROL;
     if (ctx?.particles) {
-      ctx.particles.dustPuff(x, 0.3, z, 5);
-      ctx.particles.smokePuff(x, 1.1, z, 2, 0.35);
+      ctx.particles.dustPuff(x, ey + 0.3, z, 5);
+      ctx.particles.smokePuff(x, ey + 1.1, z, 2, 0.35);
     }
   }
 }

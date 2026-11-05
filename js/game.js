@@ -617,7 +617,13 @@ export class Game {
     this._empT = 9 + Math.random() * 7;
     this._empActive = 0;
     this._cargoCd = 0;
-    this._orbFactor = 1;
+    this._hazCd = 0;
+    this._zoneSlow = 1;
+    // chunk visibility radius: just past the fog wall (mapChunks)
+    const vd = (m.atmo?.fogFar ?? 160) + 25;
+    this.newAreas.setViewDist(m.area, vd);
+    this.newAreas2.setViewDist(m.area, vd);
+    this.newAreas3.setViewDist(m.area, vd);
     this.hud.waterToggle(!!this._mods.underwater);
     this.hud.empGlitch(false);
     this.slow.t = 0;
@@ -629,19 +635,27 @@ export class Game {
 
   _intermission() {
     if (this.state !== 'playing') return;
-    this.state = 'victory';
+    // LIVE intermission: the world keeps running (the last kill already
+    // happened — nothing left to fight) so the player can walk around,
+    // reload, loot while the result card counts down and auto-advances.
+    // state stays 'playing'; pointer lock stays on.
     this._advancePending = true;
     this.audio.play('victory', { volume: 0.9 });
     const acc = this.shotsFired ? Math.round((this.shotsHit / this.shotsFired) * 100) : 0;
     this.hud.showIntermission(this._mission(), MISSIONS[this.missionIdx + 1], this.kills, acc, formatTime(this.elapsed), INTERMISSION.seconds);
-    try { this.player.controls.unlock(); } catch { /* noop */ }
     document.getElementById('pause-screen').classList.add('hidden');
     // the window dismisses itself when the countdown runs out — the player
-    // never has to click; clicking only skips ahead of the countdown
+    // never has to click; if they ESC-paused, defer until they are back
     clearTimeout(this._interTO);
-    this._interTO = setTimeout(() => {
-      if (this.state === 'victory' && this._advancePending) this._advanceMission(true);
-    }, INTERMISSION.seconds * 1000);
+    const tryAdvance = () => {
+      if (!this._advancePending) return;
+      if (!document.getElementById('pause-screen').classList.contains('hidden')) {
+        this._interTO = setTimeout(tryAdvance, 1000);
+        return;
+      }
+      this._advanceMission(true);
+    };
+    this._interTO = setTimeout(tryAdvance, INTERMISSION.seconds * 1000);
   }
 
   _advanceMission(auto = false) {
@@ -675,6 +689,8 @@ export class Game {
     if (this.scene.fog) {
       this.scene.fog.near = at.fogNear ?? 55;
       this.scene.fog.far = at.fogFar ?? 230;
+      // per-world fog tint: sealed brass halls need warm haze, not navy void
+      this.scene.fog.color.set(at.fogColor ?? 0x070b15);
     }
     this._fogBase = { near: this.scene.fog?.near ?? 55, far: this.scene.fog?.far ?? 230 };
     // clip the frustum near the fog wall — neighbouring worlds 200+ m
@@ -870,6 +886,27 @@ export class Game {
       this.particles.sparkBurst(hit.point.x, hit.point.y, hit.point.z, 0, -1, 0, 8);
       return;
     }
+    // Tomb pillar mechanism — shooting it drops a boulder on whoever
+    // stands below (same routing as the polar icicles, own drop logic).
+    if (mesh.userData.fallTrap != null) {
+      if (this.newAreas.dropFallTrap(mesh)) {
+        const px = mesh.position.x, pz = mesh.position.z;
+        this.audio.play('land', { volume: 1.0, rate: 0.6 });
+        this.player.shake(0.03);
+        for (const e of this.enemyMgr.enemies) {
+          if (e.state === 'DEAD') continue;
+          const dx = e.group.position.x - px, dz = e.group.position.z - pz;
+          if (dx * dx + dz * dz < 12) {
+            e.applyDamage(52, 'body', dx * 0.2, dz * 0.2, {
+              particles: this.particles, audio: this.audio,
+              hitPoint: new THREE.Vector3(px, 1.2, pz),
+            });
+          }
+        }
+      }
+      this.particles.sparkBurst(hit.point.x, hit.point.y, hit.point.z, 0, -1, 0, 10);
+      return;
+    }
     // Lunar airlock wall switch — shooting it unseals the door.
     if (mesh.userData.switchDoor != null) {
       if (this.newAreas.openSwitch(mesh)) {
@@ -936,8 +973,8 @@ export class Game {
       this.player.setSpawn(this._mission().spawn);
       this.player.hp = PLAYER.overrunHp;
       this.player.shake(0.03);
-      this.hud.respawnAlert('entry');      // tell the player WHERE they went
-      this.hud.missionBanner();            // and which mission they're in
+      this.hud.showDowned();              // WHY you woke up at the gate
+      this.hud.missionBanner();            // and which mission you're in
       this.enemyMgr.hearAll(this.player.position);  // the regroup noise draws hostiles back
     }
     this.hud.setHP(this.player.hp);
@@ -1198,6 +1235,18 @@ export class Game {
     this.enemyMgr.update(dt, this._enemyCtx);
     this._updateMuzzleFX(dt);
 
+    // shared context handed to the themed-world updaters (design-doc
+    // mechanics that need the player: currents, quicksand, shark…)
+    this._worldCtx = this._worldCtx ?? {
+      feet: this.player.feet,
+      damage: (n) => this._damagePlayer(n),
+      respawnPlayer: () => this.player.setSpawn(this._mission().spawn),
+      shake: (a) => this.player.shake(a),
+      flash: () => this.hud.flashDamage(),
+      particles: this.particles,
+      audio: this.audio,
+    };
+
     // battlefield salvage — walk over a drop to grab it
     for (const kind of this.pickups.update(dt, this.player.feet)) this._collect(kind);
 
@@ -1207,9 +1256,9 @@ export class Game {
     this.store.update(dt, this.player.position);
     this.station.update(dt, this.time);
     this.sakura.update(dt);
-    this.newAreas.update(dt);   // holo ads, caustics, gears, torches, fish, alarms…
-    this.newAreas2.update(dt);  // aurora, blizzard, icicles, cargo train, leaves, bugs
-    this.newAreas3.update(dt);  // sandstorm cycle, water orbs, megalodon, big gears
+    this.newAreas.update(dt, this._worldCtx);   // holo ads, caustics, gears, torches, fish, alarms…
+    this.newAreas2.update(dt, this._worldCtx);  // aurora, blizzard, icicles, cargo train, leaves, bugs
+    this.newAreas3.update(dt, this._worldCtx);  // sandstorm cycle, water orbs, megalodon, big gears
 
     // sandstorm (canyon): periodically crush the visibility
     if (md.sandstorm && this.scene.fog && this._fogBase) {
@@ -1223,22 +1272,73 @@ export class Game {
       this.player.vy += 15 * dt;
     }
 
-    // floating water orbs drag you down to a swim (aquarium)
+    // zone slow fields: aquarium water orbs (swim drag) + tomb quicksand
+    let zoneSlow = 1;
     if (md.zeroG) {
       const f = this.player.feet;
-      let inOrb = false;
       for (const o of this.newAreas3.orbs) {
         const dx = f.x - o.x, dy = (f.y + 0.9) - o.y, dz = f.z - o.z;
-        if (dx * dx + dy * dy + dz * dz < o.r * o.r) { inOrb = true; break; }
+        if (dx * dx + dy * dy + dz * dz < o.r * o.r) { zoneSlow = 0.5; break; }
       }
-      const want = inOrb ? 0.5 : 1;
-      if (this._orbFactor !== want) {
-        this._orbFactor = want;
-        this.player.sScale = (md.speedScale ?? 1) * want;
-      }
-    } else if (this._orbFactor !== 1) {
-      this._orbFactor = 1;
     }
+    if (md.traps) {
+      const f = this.player.feet;
+      for (const q of this.newAreas.quicksand) {
+        const dx = f.x - q.x, dz = f.z - q.z;
+        if (dx * dx + dz * dz < q.r * q.r) { zoneSlow = Math.min(zoneSlow, 0.45); }
+      }
+    }
+    if (this._zoneSlow !== zoneSlow) {
+      this._zoneSlow = zoneSlow;
+      this.player.sScale = (md.speedScale ?? 1) * zoneSlow;
+    }
+
+    // water-channel jets (atlantis): ride a current for fast traversal
+    if (md.currents) {
+      for (const c of this.newAreas.currents) {
+        const f = this.player.feet;
+        const dx = f.x - c.x, dz = f.z - c.z;
+        if (dx * dx + dz * dz < c.r * c.r) {
+          f.x += c.dx * c.power * dt;
+          f.z += c.dz * c.power * dt;
+          if (Math.random() < 8 * dt) this.particles.bubblePuff(f.x, f.y + 0.6, f.z, 4);
+        }
+      }
+    }
+
+    // clockwork: standing on a turning gear drags you around with it
+    if (md.gears) {
+      const f = this.player.feet;
+      for (const gs of this.newAreas3.gearSpin) {
+        if (!this.player.grounded || Math.abs(f.y - gs.top) > 0.55) continue;
+        const dx = f.x - gs.x, dz = f.z - gs.z;
+        if (dx * dx + dz * dz > gs.r * gs.r) continue;
+        const a = gs.omega * dt;
+        const cos = Math.cos(a), sin = Math.sin(a);
+        f.x = gs.x + dx * cos - dz * sin;
+        f.z = gs.z + dx * sin + dz * cos;
+      }
+    }
+
+    // lethal gear-mesh gaps: bite once, then a short grace period
+    if (md.hazards && this._hazCd <= 0) {
+      const f = this.player.feet;
+      for (const h of this.newAreas3.hazards) {
+        const dx = f.x - h.x, dz = f.z - h.z;
+        if (dx * dx + dz * dz < h.r * h.r && Math.abs(f.y - h.y) < 1.4) {
+          this._hazCd = 2.5;
+          const d = Math.hypot(dx, dz) || 1;
+          f.x += (dx / d) * 1.6; f.z += (dz / d) * 1.6;
+          this.player.shake(0.08);
+          this.hud.flashDamage();
+          this.particles.sparkBurst(f.x, h.y + 0.5, f.z, 0, 1, 0, 16);
+          this.audio.play('impactMetal', { volume: 1.0, rate: 0.6 });
+          this._damagePlayer(h.dmg ?? 85);
+          break;
+        }
+      }
+    }
+    if (this._hazCd > 0) this._hazCd -= dt;
 
     // springy canopy leaves launch you up to the walkways
     for (const v of this.newAreas2.bouncePads) {
