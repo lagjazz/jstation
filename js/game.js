@@ -367,11 +367,22 @@ export class Game {
     const registries = this._warmRegistries();
     const undoWarm = this._warmUpEntities();
     const hidden = [];
-    this.scene.traverse((o) => { if (!o.visible) { o.visible = true; hidden.push(o); } });
+    const culled = [];
+    this.scene.traverse((o) => {
+      if (!o.visible) { o.visible = true; hidden.push(o); }
+      // Visible is not enough: one camera pose frustum-culls the other 15 arenas,
+      // and a culled object never binds its attribute buffers, so their geometry
+      // and textures upload the moment you first walk into each area. That is the
+      // "stalls for the first few minutes" pattern. One no-cull pass puts the
+      // whole station into VRAM while the loading screen still covers the canvas.
+      if (o.frustumCulled) { o.frustumCulled = false; culled.push(o); }
+    });
     const tc = performance.now();
     this.renderer.compile(this.scene, this.camera);
     this.composer.render();
+    this.composer.render();   // second pass: shadow maps and post targets, not just color
     const compileMs = Math.round(performance.now() - tc);
+    for (const o of culled) o.frustumCulled = true;
     for (const o of hidden) o.visible = false;
     undoWarm();
     // What startup actually costs, per phase: readable here (window.__bootTimings)
