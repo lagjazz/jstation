@@ -31,11 +31,13 @@ export class HUD {
       vKills: $('v-kills'),
       vAcc: $('v-accuracy'),
       vTime: $('v-time'),
+      missionInd: $('mission-ind'),
       mb1: document.querySelector('#mission-banner .mb-1'),
       mb2: document.querySelector('#mission-banner .mb-2'),
       mb3: document.querySelector('#mission-banner .mb-3'),
       wave: $('wave-ind'),
       waveAlert: $('wave-alert'),
+      targetPips: $('target-pips'),
       hsLayer: $('hs-layer'),
       water: $('water-tint'),
       emp: $('emp-flash'),
@@ -78,6 +80,31 @@ export class HUD {
     el.classList.remove('show');
     void el.offsetWidth;
     el.classList.add('show');
+  }
+
+  /** Last-target direction pips: when only a couple hostiles remain and the
+   *  player can't see them, ring the crosshair with small bearing markers so
+   *  "I can't find the last one" never stalls the mission. relAngles = screen
+   *  bearings in radians (0 = straight ahead). Call with [] to clear. */
+  targetPips(relAngles) {
+    const box = this.el.targetPips;
+    if (!box) return;
+    const want = relAngles.length;
+    while (box.childElementCount < want) {
+      const d = document.createElement('div');
+      d.className = 'tgt-pip';
+      box.appendChild(d);
+    }
+    while (box.childElementCount > want) box.removeChild(box.lastChild);
+    const R = 46;
+    for (let i = 0; i < want; i++) {
+      const a = relAngles[i];
+      const x = Math.sin(a) * R, y = -Math.cos(a) * R;
+      const el = box.children[i];
+      el.style.left = `${x.toFixed(1)}px`;
+      el.style.top = `${y.toFixed(1)}px`;
+    }
+    box.classList.toggle('on', want > 0);
   }
 
   /** Salvage grabbed — brief center-screen confirmation. */
@@ -169,7 +196,9 @@ export class HUD {
   }
 
   /** Fill the in-world banner with mission text (call before missionBanner). */
-  setMission(m) {
+  setMission(m, idx = 0, total = 0) {
+    if (this.el.missionInd && idx)
+      this.el.missionInd.textContent = `MISSION ${String(idx).padStart(2, '0')} / ${total}`;
     this.el.mb1.textContent = m.name1;
     this.el.mb2.textContent = m.name2;
     this.el.mb3.textContent = `${m.desc} — ${m.jp}`;

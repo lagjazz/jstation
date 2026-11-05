@@ -193,7 +193,7 @@ export const MISSIONS = [
     // spawn on the frozen-sea side, three-quarter view of the icebreaker
     // with both glacier ridges clipped into frame edges (audit: pulled in
     // from 122,-22 so the hull reads larger without touching the flank)
-    spawn: { x: 144, z: -16, yaw: -0.8 },
+    spawn: { x: 144, z: -21, yaw: -0.8 },
     atmo: { fogNear: 24, fogFar: 150, moon: 1.3, bg: 'aurora' },
     mods: { ice: true, gapScale: 1.15 },
   },

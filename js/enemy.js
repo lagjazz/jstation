@@ -908,9 +908,12 @@ export class EnemyManager {
     return this.aliveCount() + this._wavePlan.reduce((a, n) => a + n, 0);
   }
 
+  resetRecallClock() { this._recallAge = 0; }
+
   update(dt, ctx) {
     for (const e of this.enemies) e.update(dt, ctx);
     this._antiStuck(ctx);
+    this._idleRecall(dt, ctx);
 
     if (this._wavePlan.length) {
       this._waveT -= dt;
@@ -926,6 +929,37 @@ export class EnemyManager {
 
   hearAll(pos) {
     for (const e of this.enemies) e.hear(pos);
+  }
+
+  /** Last-hostile failsafe: an enemy that has never engaged the player for
+   *  ~50 s (spawned in a pocket / behind a sealed door, e.g. MISSION 09
+   *  sunken ruins) is teleported into open ground near the player so the
+   *  mission can always be finished. */
+  _idleRecall(dt, ctx) {
+    this._recallAge = (this._recallAge ?? 0) + dt;
+    const T = this._recallAge;
+    if (!ctx.playerPos) return;
+    let recalled = 0;
+    for (const e of this.enemies) {
+      if (e.state === ESTATE.DEAD) continue;
+      if (e.state === ESTATE.CHASE || e.state === ESTATE.ATTACK || e.state === ESTATE.HIT)
+        e._engagedAt = T;
+      if (e.hp < (e._lastHp ?? e.hp)) e._engagedAt = T;   // took a hit = engaged
+      e._lastHp = e.hp;
+      if ((e._engagedAt ?? 0) > T - 50 || T < 25) continue;
+      // never engaged, and the mission's been running: recall it to the fight.
+      // spread simultaneous recalls around the player so they don't stack
+      const ang = ((T * 0.7) + recalled * 2.1) % (Math.PI * 2);
+      recalled++;
+      const [sx, sz] = this._freeSpot(
+        ctx.playerPos.x + Math.sin(ang) * 9, ctx.playerPos.z + Math.cos(ang) * 9);
+      e.group.position.set(sx, 0, sz);
+      e.anchorY = 0;
+      e._engagedAt = T;
+      e.state = ESTATE.CHASE;
+      e.losTimer = 0;
+      ctx.onRecall?.(e);
+    }
   }
 
   /**

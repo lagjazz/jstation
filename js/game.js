@@ -575,6 +575,7 @@ export class Game {
   /** Arm the current mission: player spawn, wave-based RANDOM hostiles, HUD, atmosphere. */
   _setupMission() {
     const m = this._mission();
+    this._deembedSpawn(m.spawn);
     this.player.setSpawn(m.spawn);
     this.player.hp = PLAYER.maxHp;
     this.player.missionTime = 0;
@@ -583,6 +584,7 @@ export class Game {
     this.hud.setWeaponName(this.weapon.w.def.label);
     this.hud.setAmmo(this.weapon.w.mag, this.weapon.w.reserve);
     this.enemyMgr.deploy(m);
+    this.enemyMgr.resetRecallClock();
     this.pickups.clear();
     this._shotDirty = true;
     this.enemyMgr.attachAudio(this.audio);
@@ -627,7 +629,7 @@ export class Game {
     this.hud.waterToggle(!!this._mods.underwater);
     this.hud.empGlitch(false);
     this.slow.t = 0;
-    this.hud.setMission(m);
+    this.hud.setMission(m, this.missionIdx + 1, MISSIONS.length);
     this.hud.setWave(this.enemyMgr.waveInfo());
     this.hud.setTargets(this.enemyMgr.remaining());
     this.hud.missionBanner();
@@ -943,6 +945,55 @@ export class Game {
     this.player.shake(0.0015);
   }
 
+  /** Last-target bearing pips: once at most 2 hostiles remain, ring the
+   *  crosshair with a marker per live enemy so a hidden last target is
+   *  always findable (MISSION 06 tomb + MISSION 09 ruins deadlock class). */
+  /** If a builder/prop ever eats a mission spawn point (MISSION 10 glacier
+   *  ridge class of bug), nudge the spawn to the nearest open cell instead
+   *  of spawning the player half-inside a collider. */
+  _deembedSpawn(sp) {
+    const world = this.player.world || this.world;
+    if (!world) return;
+    const R = 0.45;
+    const solid = (x, z) => {
+      for (const b of world.all())
+        if (b.max.x > x - R && b.min.x < x + R && b.max.z > z - R && b.min.z < z + R &&
+            b.max.y > 0.1 && b.min.y < 2.0) return true;
+      return false;
+    };
+    if (!solid(sp.x, sp.z)) return;
+    for (let ring = 1; ring <= 8; ring++) {
+      const d = ring * 0.8;
+      for (let k = 0; k < 12; k++) {
+        const a = (k / 12) * Math.PI * 2;
+        const x = sp.x + Math.cos(a) * d, z = sp.z + Math.sin(a) * d;
+        if (!solid(x, z)) {
+          console.warn(`[spawn] ${this._mission().area} spawn embedded — nudged to ${x.toFixed(1)},${z.toFixed(1)}`);
+          sp.x = x; sp.z = z;
+          return;
+        }
+      }
+    }
+  }
+
+  _targetPips() {
+    const rem = this.enemyMgr.remaining();
+    if (rem === 0 || rem > 2) { this.hud.targetPips?.([]); return; }
+    const p = this.player;
+    // yaw lives in the camera quaternion (player has no .yaw field)
+    this._pipEuler = this._pipEuler ?? new THREE.Euler();
+    this._pipEuler.setFromQuaternion(this.camera.quaternion, 'YXZ');
+    const rel = [];
+    for (const e of this.enemyMgr.enemies) {
+      if (e.state === 'DEAD' || rel.length >= 2) continue;
+      const dx = e.group.position.x - p.position.x;
+      const dz = e.group.position.z - p.position.z;
+      if (Math.hypot(dx, dz) < 3) continue;
+      rel.push(Math.atan2(-dx, -dz) - this._pipEuler.y);
+    }
+    this.hud.targetPips?.(rel);
+  }
+
   _onEnemyKilled(enemy, headshot) {
     this.kills++;
     this.pickups.spawnFrom(enemy);        // salvage drops (medkit / ammo)
@@ -1226,6 +1277,10 @@ export class Game {
         this.hud.setTargets(this.enemyMgr.remaining());
         this._shotDirty = true;
       },
+      onRecall: () => {
+        this.hud.pickupToast('⚠ LAST CONTACT REDIRECTED · 久未接敌的敌人已被重新部署到你附近');
+        this.audio.play('enemyGrunt', { volume: 0.8 });
+      },
     };
     this._enemyCtx.playerCrouch = ctx.crouching;
     this._enemyCtx.envMeshes = this.envMeshes;
@@ -1233,6 +1288,7 @@ export class Game {
     this._enemyCtx.bubbles = !!md.underwater;
     this._enemyCtx.arena = this._arenaRect;
     this.enemyMgr.update(dt, this._enemyCtx);
+    this._targetPips();
     this._updateMuzzleFX(dt);
 
     // shared context handed to the themed-world updaters (design-doc
