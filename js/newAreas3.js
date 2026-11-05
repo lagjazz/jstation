@@ -107,11 +107,10 @@ export class NewAreas3 {
     this._wctx = null;            // last world ctx (shark hunt needs the player)
   }
 
-  build() {
-    this._canyon();
-    this._aquarium();
-    this._clockwork();
-  }
+  // per-area build so boot can yield between maps (see newAreas.js / game.js)
+  get areaNames() { return ['canyon', 'aquarium', 'clockwork']; }
+  buildArea(name) { const f = this['_' + name]; if (f) f.call(this); }
+  build() { for (const a of this.areaNames) this.buildArea(a); }
 
   // ---- chunk plumbing (see mapChunks.js) ----
   _grid(area, { x0, z0, x1, z1 }, cell = 17) {

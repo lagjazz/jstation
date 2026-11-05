@@ -240,11 +240,10 @@ export class NewAreas2 {
     this._vd = {};
   }
 
-  build() {
-    this._ice();
-    this._orbit();
-    this._canopy();
-  }
+  // per-area build so boot can yield between maps (see newAreas.js / game.js)
+  get areaNames() { return ['ice', 'orbit', 'canopy']; }
+  buildArea(name) { const f = this['_' + name]; if (f) f.call(this); }
+  build() { for (const a of this.areaNames) this.buildArea(a); }
 
   // ---- chunk plumbing (see mapChunks.js) ----
   _grid(area, { x0, z0, x1, z1 }, cell = 17) {

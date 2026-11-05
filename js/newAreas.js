@@ -227,14 +227,13 @@ export class NewAreas {
     return true;
   }
 
-  build() {
-    this._cyber();
-    this._moon();
-    this._tomb();
-    this._skyport();
-    this._lab();
-    this._atlantis();
-  }
+  // build() runs per area so boot can yield between maps (see game.js):
+  // one multi-hundred-ms canvas/geometry block per area freezes the loading
+  // screen; one block PER AREA lets the bar animate and keeps every task
+  // short enough that the page never appears wedged.
+  get areaNames() { return ['cyber', 'moon', 'tomb', 'skyport', 'lab', 'atlantis']; }
+  buildArea(name) { const f = this['_' + name]; if (f) f.call(this); }
+  build() { for (const a of this.areaNames) this.buildArea(a); }
 
   update(dt, ctx) {
     for (const u of this.updaters) u(dt);

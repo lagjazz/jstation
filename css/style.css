@@ -235,7 +235,7 @@ body {
 
 /* HP-zero respawn notice: a brief card, never a silent teleport */
 #downed-card {
-  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  position: fixed; left: 50%; top: 20%; transform: translate(-50%, -50%);
   z-index: 45; pointer-events: none; text-align: center;
   background: rgba(10, 6, 8, 0.86); border: 1px solid rgba(255, 43, 58, 0.55);
   border-top: 3px solid var(--red); padding: 22px 40px; min-width: 380px;

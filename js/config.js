@@ -299,6 +299,9 @@ export const INTERMISSION = { seconds: 4 };
 // Per weapon (WEAPONS[].sprayRamp / climbMin / climbMax):
 //   sprayRamp  shots until the climb reaches climbMax
 //   climbMin/Max  camera pitch climb per shot (rad) at 1 shot vs. full spray
+//   climbKnee  optional: shots 1..knee stay near climbMin, then the climb
+//     ACCELERATES to climbMax by sprayRamp (AR spray stays flat for the
+//     first burst, then kicks hard). Weapons with no auto fire use 0/0.
 export const RECOIL = {
   resetAfter: 0.30,   // seconds of silence before the pattern cools
   coolRate: 6.5,      // how fast the spray count washes out once cooling
@@ -310,7 +313,7 @@ export const WEAPONS = {
     auto: true, rpm: 640, damage: 26, pellets: 1,
     mag: 30, reserve: 120, reserveMax: 180,
     spreadBase: 0.0035, spreadKick: 0.0042, spreadMax: 0.04,
-    sprayRamp: 12, climbMin: 0.0015, climbMax: 0.0085,
+    sprayRamp: 16, climbMin: 0.0015, climbMax: 0.013, climbKnee: 5,
     kick: 1.0, reloadTime: 2.1, range: 140,
   },
   pistol: {
@@ -318,7 +321,7 @@ export const WEAPONS = {
     auto: false, rpm: 460, damage: 30, pellets: 1,
     mag: 12, reserve: 72, reserveMax: 120,
     spreadBase: 0.0028, spreadKick: 0.003, spreadMax: 0.024,
-    sprayRamp: 5, climbMin: 0.002, climbMax: 0.011,
+    sprayRamp: 6, climbMin: 0, climbMax: 0,
     kick: 0.8, reloadTime: 1.5, range: 90,
   },
   shotgun: {
@@ -326,7 +329,7 @@ export const WEAPONS = {
     auto: false, rpm: 78, damage: 11, pellets: 8,
     mag: 6, reserve: 36, reserveMax: 60,
     spreadBase: 0.02, spreadKick: 0.01, spreadMax: 0.06,
-    sprayRamp: 3, climbMin: 0.005, climbMax: 0.018,
+    sprayRamp: 4, climbMin: 0.005, climbMax: 0.023,
     kick: 2.6, reloadTime: 2.7, range: 45,
   },
 };

@@ -126,19 +126,44 @@ export class Game {
       await stage(78, 'Planting: Sakura garden', 'Sakura');
       this._buildSakura();
 
-      await stage(82, 'Building: Sector maps 04–09', 'Six sector maps');
-      this._buildNewAreas();
+      // Themed maps are built ONE PER AREA (newAreas*.buildArea) so boot
+      // yields between maps: each map is one canvas+geometry block of a few
+      // hundred ms; one block per AREA keeps every main-thread task short
+      // and lets the bar animate — the "loading screen wedges several
+      // times" pattern was exactly these blocks back-to-back.
+      this.newAreas = new NewAreas(this.scene, this.world, this.particles);
+      this.newAreas2 = new NewAreas2(this.scene, this.world, this.particles);
+      this.newAreas3 = new NewAreas3(this.scene, this.world, this.particles);
+      const mgrs = [this.newAreas, this.newAreas2, this.newAreas3];
+      const totalAreas = mgrs.reduce((n, m) => n + m.areaNames.length, 0);
+      let pct = 82;
+      const stepPct = (89 - pct) / totalAreas;
+      for (const mgr of mgrs) {
+        for (const a of mgr.areaNames) {
+          mgr.buildArea(a);
+          pct += stepPct;
+          await stage(Math.round(pct), `Building: Sector map · ${a.toUpperCase()}`, a);
+        }
+        this.envMeshes.push(...mgr.raycastMeshes);
+      }
+      this.pickups = new PickupManager(this.scene, this.particles);
+      // MISSIONS[0] is the station. Boot never runs _setupMission, so without
+      // this every themed world stays visible for mission 01 — measured
+      // 14.8k draw calls / 881k tris on the first minutes of play vs 480
+      // after a mission change. The prewarm pass uploads their buffers
+      // anyway, so arming a themed mission later costs nothing.
+      this._applyWorldVisibility(this._mission().area);
 
-      await stage(86, 'Loading: Weapons', 'Weapons');
+      await stage(90, 'Loading: Weapons', 'Weapons');
       this.player = new Player(this.camera, this.world, this.audio);
       this.scene.add(this.camera);
       this.weapon = new WeaponController(this.camera, this.audio, this.particles);
       this.weapon.init(this.rifleGLB ?? null);
 
-      await stage(90, 'Spawning: Enemies', 'Enemies');
+      await stage(92, 'Spawning: Enemies', 'Enemies');
       this._buildEnemies();
 
-      await stage(92, 'Lighting: fixed-budget rig', `${(this._preset().lightBudget)} light slots`);
+      await stage(94, 'Lighting: fixed-budget rig', `${(this._preset().lightBudget)} light slots`);
       // Every point light the 16 arenas ask for would be uploaded to every
       // material and looped per fragment; the rig keeps a constant count and
       // feeds it the fixtures nearest the camera. Collected BEFORE the prewarm
@@ -146,11 +171,11 @@ export class Game {
       this.lightRig = new LightRig(this.scene, this._preset().lightBudget);
       console.log(`[lights] ${this.lightRig.collect()} fixtures -> pool of ${this.lightRig.budget}`);
 
-      await stage(94, 'Preparing: Audio graph', 'Audio (synth, Web Audio)');
+      await stage(96, 'Preparing: Audio graph', 'Audio (synth, Web Audio)');
       await this.audio.prepare();   // synth + file fetch here, not on the start click
 
       await stage(98, 'Final self-check');
-      this._finalChecks();
+      await this._finalChecks();
 
       await stage(100, 'READY');
       this._installProfilers();
@@ -291,20 +316,18 @@ export class Game {
     this.sakura.build();
   }
 
-  /** MISSIONS 04–09 sector maps (also register their SPAWN_POOLS). */
-  _buildNewAreas() {
-    this.newAreas = new NewAreas(this.scene, this.world, this.particles);
-    this.newAreas.build();
-    this.envMeshes.push(...this.newAreas.raycastMeshes);
-    // MISSIONS 10–15 (moremaps2.md): icebreaker / orbital ring / canopy /
-    // canyon / zero-G aquarium / clockwork — plus salvage drops
-    this.newAreas2 = new NewAreas2(this.scene, this.world, this.particles);
-    this.newAreas2.build();
-    this.envMeshes.push(...this.newAreas2.raycastMeshes);
-    this.newAreas3 = new NewAreas3(this.scene, this.world, this.particles);
-    this.newAreas3.build();
-    this.envMeshes.push(...this.newAreas3.raycastMeshes);
-    this.pickups = new PickupManager(this.scene, this.particles);
+  /** Show only the current mission's themed world (station missions hide all
+   *  three managers' groups). Called at boot AND on every mission change:
+   *  un-armed worlds are uploaded to VRAM once by the prewarm pass, then stay
+   *  hidden — walking into a new arena never pays an upload, and the current
+   *  mission never draws the other 15 worlds. */
+  _applyWorldVisibility(area) {
+    this.newAreas.setVisible(area);
+    this.newAreas2.setVisible(area);
+    this.newAreas3.setVisible(area);
+    if (this.platform?.cityGroup) {
+      this.platform.cityGroup.visible = STATION_AREAS.has(area) || area === 'cyber';
+    }
   }
 
   _buildTrain() {
@@ -362,12 +385,58 @@ export class Game {
     return { touched, ms: Math.round(performance.now() - t0) };
   }
 
-  _prewarmMaterials() {
+  // Program compilation and GPU buffer uploads for everything in the world,
+  // done behind the loading screen. Measured on boot this used to be ONE
+  // ~8 s synchronous block (compile + two full-res composer renders of all
+  // 16 arenas) — that was the loading screen wedging at "READY". Now it is
+  // incremental, in three steps, each one a short task:
+  //   1. compileAsync (r165) when the driver has KHR_parallel_shader_compile,
+  //      so the ~110 program variants link while the browser keeps painting;
+  //   2. batched first-draws into a tiny OFFSCREEN target — the first draw of
+  //      a geometry/texture is what uploads it, and a 480×270 offscreen pass
+  //      pays full upload cost at ~zero raster cost. Offscreen because these
+  //      frames show only one batch of the world (and the overlays here are
+  //      semi-transparent, so they must never reach the canvas);
+  //   3. one real composer frame at full size — compiles/allocates the post
+  //      chain targets and the shadow map with the final object set.
+  // Total GPU work is unchanged; no single main-thread task is long.
+  async _prewarmMaterials(bootPass = false) {
+    if (this._pwPromise) { this._pwAgain = true; return this._pwPromise; }
+    this._pwPromise = this._prewarmRun(bootPass).finally(() => {
+      this._pwPromise = null;
+      // a quality change mid-warm re-keyed programs again — one follow-up pass
+      if (this._pwAgain) { this._pwAgain = false; this._prewarmMaterials(false); }
+    });
+    return this._pwPromise;
+  }
+
+  async _prewarmRun(bootPass = false) {
     const t0 = performance.now();
     const registries = this._warmRegistries();
-    const undoWarm = this._warmUpEntities();
+
+    // Quality change mid-session: buffers were uploaded at boot and never
+    // leave VRAM, so ONLY the programs need re-keying (shadows / pixel ratio
+    // / light pool). compileAsync links them while the browser keeps
+    // painting; then one normal frame. The live loop keeps rendering the
+    // real scene the whole time — nothing in the graph is touched.
+    if (!bootPass) {
+      try {
+        if (this.renderer.compileAsync) await this.renderer.compileAsync(this.scene, this.camera);
+        else this.renderer.compile(this.scene, this.camera);
+      } catch (err) {
+        console.warn('[warm] compileAsync failed — sync fallback', err);
+        this.renderer.compile(this.scene, this.camera);
+      }
+      this.composer.render();
+      window.__bootTimings = { registries, rewarm: Math.round(performance.now() - t0) };
+      console.log(`[warm] re-compile ${Math.round(performance.now() - t0)} ms (yielded, no scene edits)`);
+      return;
+    }
+
+    const undoWarm = await this._warmUpEntities();
     const hidden = [];
     const culled = [];
+    const lods = [];
     this.scene.traverse((o) => {
       if (!o.visible) { o.visible = true; hidden.push(o); }
       // Visible is not enough: one camera pose frustum-culls the other 15 arenas,
@@ -376,19 +445,97 @@ export class Game {
       // "stalls for the first few minutes" pattern. One no-cull pass puts the
       // whole station into VRAM while the loading screen still covers the canvas.
       if (o.frustumCulled) { o.frustumCulled = false; culled.push(o); }
+      // Same trap in LOD form: from the spawn pose every distant cluster renders
+      // only its bboxProxy level, so the HI geometry + its canvas textures upload
+      // mid-fight when the player first walks close enough to swap. Force every
+      // level to draw during the warm passes; the next real frame's LOD.update
+      // picks the right level again.
+      if (o.isLOD) {
+        lods.push(o);
+        o.autoUpdate = false;
+        for (const lv of o.levels) {
+          if (!lv.object.visible) { lv.object.visible = true; hidden.push(lv.object); }
+        }
+      }
     });
     const tc = performance.now();
-    this.renderer.compile(this.scene, this.camera);
+
+    // 1 — shader programs (async where the driver supports it)
+    try {
+      if (this.renderer.compileAsync) await this.renderer.compileAsync(this.scene, this.camera);
+      else this.renderer.compile(this.scene, this.camera);
+    } catch (err) {
+      console.warn('[warm] compileAsync failed — sync fallback', err);
+      this.renderer.compile(this.scene, this.camera);
+    }
+
+    // 2 — batched buffer uploads, offscreen, one frame per batch.
+    // The per-batch frame does the MINIMUM: no background pass and (after
+    // the first batch) no shadow pass — the point of a batch is the first
+    // gl.bindBuffer of that batch's geometries, not re-rasterizing the
+    // moon's 2048² shadow map eighteen times.
+    const rt = new THREE.WebGLRenderTarget(480, 270);
+    const kids = this.scene.children.slice();
+    const B = 20;
+    const stepEl = document.getElementById('l-step');
+    const barEl = document.getElementById('l-bar');
+    const bg = this.scene.background;
+    this.scene.background = null;
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.setRenderTarget(rt);
+    for (let i = 0; i < kids.length; i += B) {
+      for (let j = 0; j < kids.length; j++) kids[j].visible = (j >= i && j < i + B);
+      this.renderer.shadowMap.needsUpdate = i === 0;   // casters bind once
+      this.renderer.render(this.scene, this.camera);
+      if (this.state === 'boot') {   // keep the loading panel alive during this phase
+        const f = i / kids.length;
+        stepEl.textContent = `Uploading VRAM · ${Math.min(kids.length, i + B)}/${kids.length}`;
+        barEl.style.width = `${Math.round(98 + 2 * f)}%`;
+      }
+      await nextFrame();
+    }
+    for (const k of kids) k.visible = true;
+
+    // 2b — warm every themed sky: each world's equirect background texture
+    // AND its background-program variant first bind at that mission's
+    // switch (measured: textures 68→81, programs 172→177 climbing during
+    // play). Bind them now, one offscreen frame per sky, while nothing
+    // depends on that frame.
+    const bgMap = this._bgMap ?? (this._bgMap = { ...THEME_BG, ...THEME_BG2 });
+    const bgs = [...new Set(Object.values(bgMap).filter((t) => t))];
+    this.renderer.setRenderTarget(rt);
+    for (const k of kids) k.visible = false;   // background-only frames
+    for (let i = 0; i < bgs.length; i++) {
+      this.scene.background = bgs[i];
+      if (this.state === 'boot') stepEl.textContent = `Warming skies · ${i + 1}/${bgs.length}`;
+      this.renderer.render(this.scene, this.camera);
+      await nextFrame();
+    }
+    for (const k of kids) k.visible = true;
+    this.renderer.setRenderTarget(null);
+    this.scene.background = bg;
+
+    // 3 — one warm frame for the POST CHAIN (bloom/output programs, RTs,
+    // the complete-caster shadow map): run the composer itself at the tiny
+    // size, then hand the real size back. Full-res rasterization here buys
+    // nothing that the first gameplay frame wouldn't pay at its normal cost,
+    // and at 11k objects that full-res frame IS the stall.
+    this.composer.setSize(480, 270);
+    this.renderer.shadowMap.needsUpdate = true;
     this.composer.render();
-    this.composer.render();   // second pass: shadow maps and post targets, not just color
+    this.renderer.shadowMap.autoUpdate = true;
+    this.composer.setSize(window.innerWidth, window.innerHeight);
+    rt.dispose();
+
     const compileMs = Math.round(performance.now() - tc);
     for (const o of culled) o.frustumCulled = true;
     for (const o of hidden) o.visible = false;
+    for (const o of lods) o.autoUpdate = true;   // next frame re-picks the level
     undoWarm();
     // What startup actually costs, per phase: readable here (window.__bootTimings)
     // so a stall on a real GPU can be traced to a phase instead of guessed at.
     window.__bootTimings = { registries, compileRender: compileMs, total: Math.round(performance.now() - t0) };
-    console.log(`[warm] ${registries.touched} lazy textures/materials in ${registries.ms} ms; compile+render ${compileMs} ms`);
+    console.log(`[warm] ${registries.touched} lazy textures/materials in ${registries.ms} ms; compile+batched upload ${compileMs} ms (yielded)`);
   }
 
   // Every hostile class and every drop builds its own meshes, materials and
@@ -398,7 +545,7 @@ export class Game {
   // their buffers uploaded, so they cannot be parked out of sight), render the
   // prewarm pass over them, then clear. They are drawn once, behind the loading
   // screen, and never seen again.
-  _warmUpEntities() {
+  async _warmUpEntities() {
     if (this._entityWarm) return () => {};   // one pass per session is enough
     this._entityWarm = true;
     const em = this.enemyMgr;
@@ -415,6 +562,7 @@ export class Game {
         em.hitMeshes.push(...e.hitMeshes);
         spawned.push(e);
       }
+      await nextFrame();   // one class's geometry per frame — no build burst
     }
     const dropFloor = this.pickups.drops.length;
     for (const kind of ['ammo', 'medkit']) {
@@ -436,15 +584,15 @@ export class Game {
     };
   }
 
-  _finalChecks() {
+  async _finalChecks() {
     // touch texture getters so canvas work happens during loading, and warm shaders
     void TEX.marbleFloor; void TEX.infoScreen;
     // Prewarm: flip every not-yet-seen object visible (train is hidden until
     // its first arrival; tracer/decal/hitbox meshes until their first use) and
-    // compile + render once, so program compilation and GPU buffer uploads all
-    // happen behind the loading screen instead of as a multi-second hitch
-    // mid-fight when those objects first appear.
-    this._prewarmMaterials();
+    // compile + upload in short batches, so program compilation and GPU buffer
+    // uploads all happen behind the loading screen instead of as a
+    // multi-second hitch mid-fight when those objects first appear.
+    await this._prewarmMaterials(true);
     const gl = this.renderer.getContext();
     if (!gl || !(typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext)) {
       console.warn('[Game] WebGL2 context not detected — continuing with whatever we have.');
@@ -504,7 +652,20 @@ export class Game {
     // Only re-warm when the quality actually differs from what boot compiled:
     // a change re-keys every program, and that must not land in the first
     // minutes of play. Same quality, nothing to recompile, no blocked click.
-    if (changed) this._prewarmMaterials();
+    // When it DOES differ, re-warm incrementally (compileAsync + batched
+    // uploads, frames yielded) with the loading card back up — the click is
+    // never followed by a multi-second freeze.
+    if (changed) {
+      const loadEl = document.getElementById('loading');
+      const barEl = document.getElementById('l-bar');
+      const stepEl = document.getElementById('l-step');
+      loadEl.classList.remove('hidden');
+      barEl.style.width = '60%';
+      stepEl.textContent = `Recompiling shaders for ${q} · 再コンパイル中…`;
+      await this._prewarmMaterials();
+      barEl.style.width = '100%';
+      loadEl.classList.add('hidden');
+    }
     this.hud.show();
     this.hud.setMission(this._mission());
     this.hud.setWave(this.enemyMgr.waveInfo());
@@ -603,15 +764,10 @@ export class Game {
       ?? null;
     // the night-city skyline belongs to the station (+ the neon city of
     // cyber); a lunar base / tomb / sky gantry / lab / sunken ruins must
-    // not have Tokyo towers poking over the walls
-    if (this.platform.cityGroup) {
-      this.platform.cityGroup.visible = STATION_AREAS.has(m.area) || m.area === 'cyber';
-    }
-    // each themed world renders only while its own mission is active —
-    // kills cross-world bleed-through and keeps draw calls down
-    this.newAreas.setVisible(m.area);
-    this.newAreas2.setVisible(m.area);
-    this.newAreas3.setVisible(m.area);
+    // not have Tokyo towers poking over the walls. Each themed world
+    // renders only while its own mission is active — kills cross-world
+    // bleed-through and keeps draw calls down (same call boot uses).
+    this._applyWorldVisibility(m.area);
     this._applyAtmosphere(m);
     // Per-world player physics + special mechanics (moremaps.md mods)
     this._mods = m.mods ?? {};
@@ -746,6 +902,15 @@ export class Game {
     if (this.lightRig) this.lightRig.setBudget(p.lightBudget);
     MAT.setQuality(p);
     this.renderer.shadowMap.needsUpdate = true;
+    // A quality change mid-session re-keys EVERY program (shadows, pixel
+    // ratio, light-pool size) — the shadow map is also re-allocated above.
+    // Without an immediate re-warm that whole compile lands as a
+    // multi-second freeze on the first seconds after RESUME. Run the
+    // incremental prewarm now, behind the pause card: yielded batches, no
+    // stall when play resumes. (start/boot paths warm explicitly.)
+    if (this.player && (this.state === 'playing' || this.state === 'paused')) {
+      this._prewarmMaterials().catch((err) => console.warn('[warm] post-quality re-warm failed', err));
+    }
   }
 
   _onResize() {
@@ -861,7 +1026,15 @@ export class Game {
     // sprayRamp shots); slow fire only ever pays climbMin, i.e. nothing.
     const cm = def.climbMin ?? 0.0015;
     const cx = def.climbMax ?? 0.008;
-    this.player.addPitch(cm + (cx - cm) * this.weapon.sprayNorm);
+    const knee = def.climbKnee ?? 0;
+    let t = this.weapon.sprayNorm;
+    if (knee && this.weapon.spray > 0) {
+      const n = this.weapon.spray;
+      // gentle for the first `knee` shots, ACCELERATED climb after
+      t = n <= knee ? 0.12 * (n / knee)
+                    : 0.12 + 0.88 * Math.min((n - knee) / Math.max((def.sprayRamp ?? 8) - knee, 1), 1);
+    }
+    this.player.addPitch(cm + (cx - cm) * t);
 
     this._syncHudAmmo();
   }
@@ -1019,16 +1192,51 @@ export class Game {
     this.hud.flashDamage();
     const hp = this.player.damage(n);
     if (hp <= 0) {
-      // overrun — fall back to this mission's entrance with a partial
-      // refill (PLAYER.overrunHp); anything more has to come from medkits
-      this.player.setSpawn(this._mission().spawn);
+      // overrun — redeploy at a RANDOM open point far from the live
+      // hostiles (the fixed gate respawn meant walking out into a
+      // firing squad every death). Partial refill only; full heals are
+      // medkit-only. No hearAll: the insertion is meant to be quiet.
+      this.player.setSpawn(this._pickRespawnPoint());
       this.player.hp = PLAYER.overrunHp;
       this.player.shake(0.03);
-      this.hud.showDowned();              // WHY you woke up at the gate
+      this.hud.showDowned();              // WHY you woke up somewhere new
       this.hud.missionBanner();            // and which mission you're in
-      this.enemyMgr.hearAll(this.player.position);  // the regroup noise draws hostiles back
     }
     this.hud.setHP(this.player.hp);
+  }
+
+  /** Random safe redeploy point: open ground inside the arena bounds,
+   *  >=16 m from every live hostile when findable, facing arena center.
+   *  Falls back to the mission spawn if nothing clears. */
+  _pickRespawnPoint() {
+    const m = this._mission();
+    const b = this._arenaRect;
+    if (!b) return { ...m.spawn };
+    const world = this.player.world || this.world;
+    const solid = (x, z) => {
+      for (const bb of world.all())
+        if (bb.max.x > x - 0.5 && bb.min.x < x + 0.5 && bb.max.z > z - 0.5 && bb.min.z < z + 0.5 &&
+            bb.max.y > 0.1 && bb.min.y < 2.0) return true;
+      return false;
+    };
+    const live = this.enemyMgr.enemies.filter((e) => e.state !== 'DEAD');
+    const pad = 2.5;
+    if (b.x1 - b.x0 < pad * 3 || b.z1 - b.z0 < pad * 3) return { ...m.spawn };
+    let best = null, bestD = -1;
+    for (let i = 0; i < 48; i++) {
+      const x = b.x0 + pad + Math.random() * (b.x1 - b.x0 - pad * 2);
+      const z = b.z0 + pad + Math.random() * (b.z1 - b.z0 - pad * 2);
+      if (solid(x, z)) continue;
+      let d = 1e9;
+      for (const e of live)
+        d = Math.min(d, Math.hypot(e.group.position.x - x, e.group.position.z - z));
+      if (d >= 16) { best = { x, z }; break; }
+      if (d > bestD) { bestD = d; best = { x, z }; }
+    }
+    if (!best) return { ...m.spawn };
+    const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
+    best.yaw = Math.atan2(-(cx - best.x), -(cz - best.z));
+    return best;
   }
 
   _slowmo(cfg) { this.slow.t = cfg.duration; this.slow.scale = cfg.scale; }
@@ -1296,7 +1504,7 @@ export class Game {
     this._worldCtx = this._worldCtx ?? {
       feet: this.player.feet,
       damage: (n) => this._damagePlayer(n),
-      respawnPlayer: () => this.player.setSpawn(this._mission().spawn),
+      respawnPlayer: () => this.player.setSpawn(this._pickRespawnPoint()),
       shake: (a) => this.player.shake(a),
       flash: () => this.hud.flashDamage(),
       particles: this.particles,
