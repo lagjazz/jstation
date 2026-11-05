@@ -99,7 +99,12 @@ export class HUD {
     const R = 46;
     for (let i = 0; i < want; i++) {
       const a = relAngles[i];
-      const x = Math.sin(a) * R, y = -Math.cos(a) * R;
+      // relAngle sign: game.js computes atan2(-dx,-dz) - yaw with camera forward
+      // = (-sin yaw, -cos yaw), so a POSITIVE angle means the subject sits to the
+      // player's LEFT (-X in camera space). Screen x grows to the right, hence the
+      // minus: without it the ring mirrors and a shooter on your right paints a dot
+      // on the left.
+      const x = -Math.sin(a) * R, y = -Math.cos(a) * R;
       const el = box.children[i];
       el.style.left = `${x.toFixed(1)}px`;
       el.style.top = `${y.toFixed(1)}px`;
