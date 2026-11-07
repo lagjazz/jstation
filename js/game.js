@@ -13,7 +13,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
-import { ASSETS, DROPS, ENEMY, INTERMISSION, MISSIONS, PLAYER, SLOWMO, QUALITY_PRESETS } from './config.js';
+import { ASSETS, ENEMY, GRENADE, INTERMISSION, MISSIONS, PLAYER, QUALITY_PRESETS } from './config.js';
 import { TEX } from './textures.js';
 import { MAT } from './materials.js';
 import { AssetManager } from './assetManager.js';
@@ -28,13 +28,17 @@ import { Sakura } from './sakura.js';
 import { NewAreas, THEME_BG } from './newAreas.js';
 import { NewAreas2, THEME_BG2 } from './newAreas2.js';
 import { NewAreas3 } from './newAreas3.js';
-import { PickupManager } from './pickups.js';
+import { PickupManager, DROP_KINDS } from './pickups.js';
 import { Train } from './train.js';
 import { WeaponController } from './weapon.js';
 import { Player } from './player.js';
 import { Enemy, EnemyManager } from './enemy.js';
 import { ParticleManager } from './particleManager.js';
 import { HUD } from './hud.js';
+import './hudExtras.js';
+import { GameSystems } from './gameSystems.js';
+import { createGradePass } from './postfx.js';
+import { blockedAt } from './collision.js';
 import { clamp, formatTime, nextFrame, rand } from './utils.js';
 
 const ANNOUNCE_TEXT = '次の電車がまいります。危険ですので、黄色い線の内側までお下がりください。';
@@ -147,6 +151,7 @@ export class Game {
         this.envMeshes.push(...mgr.raycastMeshes);
       }
       this.pickups = new PickupManager(this.scene, this.particles);
+      this._initSystems();
       // MISSIONS[0] is the station. Boot never runs _setupMission, so without
       // this every themed world stays visible for mission 01 — measured
       // 14.8k draw calls / 881k tris on the first minutes of play vs 480
@@ -174,6 +179,8 @@ export class Game {
       await stage(96, 'Preparing: Audio graph', 'Audio (synth, Web Audio)');
       await this.audio.prepare();   // synth + file fetch here, not on the start click
 
+      this._applyBumpDetail();
+      this.weapon.stats = this.progress.stats;
       await stage(98, 'Final self-check');
       await this._finalChecks();
 
@@ -262,6 +269,10 @@ export class Game {
     );
     this.composer.addPass(this.bloomPass);
     this.composer.addPass(new OutputPass());
+    this.gradePass = createGradePass();
+    this.gradePass.uniforms.uRes.value.set(window.innerWidth, window.innerHeight);
+    this.gradePass.enabled = p.bloom;
+    this.composer.addPass(this.gradePass);
     this._applyPixelRatio();
   }
 
@@ -565,10 +576,11 @@ export class Game {
       await nextFrame();   // one class's geometry per frame — no build burst
     }
     const dropFloor = this.pickups.drops.length;
-    for (const kind of ['ammo', 'medkit']) {
-      this.pickups._spawn(kind, new THREE.Vector3(cam.x + dir.x * 4, 0.62, cam.z + dir.z * 4));
-    }
+    for (const kind of DROP_KINDS) this.pickups.spawn(kind, cam.x + dir.x * 4, 0, cam.z + dir.z * 4);
     const drops = this.pickups.drops.slice(dropFloor);
+    const undoProps = this.props.warm(cam.x + dir.x * 8, cam.z + dir.z * 8);
+    const undoObj = this.objectives.warm(cam.x + dir.x * 7, cam.z + dir.z * 7);
+    this.explosives.launch(new THREE.Vector3(cam.x + dir.x * 3, 1, cam.z + dir.z * 3), new THREE.Vector3(0, 1, 0), { fuse: 99, owner: 'player' });
     console.log(`[warmup] ${spawned.length} hostile dummies (${Object.keys(ENEMY.classes).length} classes) + ${drops.length} drops`);
     // Remove exactly the dummies. _clearAll() is NOT usable here: wave 1 is
     // already deployed at boot (game.js _buildEnemies), so clearing the field
@@ -578,9 +590,10 @@ export class Game {
       for (const e of spawned) this.scene.remove(e.group);
       em.enemies = em.enemies.filter((e) => !dummies.has(e));
       em.hitMeshes = em.enemies.flatMap((e) => e.hitMeshes || []);
-      const extra = new Set(drops);
-      for (const d of drops) this.scene.remove(d.mesh);
-      this.pickups.drops = this.pickups.drops.filter((d) => !extra.has(d));
+      this.pickups.clear();
+      undoProps();
+      undoObj();
+      this.explosives.clear();
     };
   }
 
@@ -638,8 +651,21 @@ export class Game {
     document.addEventListener('keyup', (e) => this._onKey(e, false));
     document.addEventListener('mousedown', (e) => {
       if (e.button === 0 && this.state === 'playing') this.mouseDown = true;
+      if (e.button === 2 && this.state === 'playing') this.rightDown = true;
+      // intermission with the pointer free: click a perk card
+      const card = e.target.closest?.('.perk');
+      if (card && this._perkChoices) {
+        const i = this._perkChoices.findIndex((p) => p.id === card.dataset.id);
+        if (i >= 0) { e.stopPropagation(); this._choosePerk(i); }
+      }
+    }, true);
+    document.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.mouseDown = false;
+      if (e.button === 2) this.rightDown = false;
     });
-    document.addEventListener('mouseup', (e) => { if (e.button === 0) this.mouseDown = false; });
+    document.addEventListener('wheel', (e) => {
+      if (this.state === 'playing' && this.player.controls.isLocked) this.weapon.cycle(e.deltaY > 0 ? 1 : -1);
+    }, { passive: true });
     document.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
@@ -678,6 +704,8 @@ export class Game {
     this.audio.listener && this.camera.add(this.audio.listener);
     this._attachPositionalAudio();
     this.audio.startAmbient();
+    this._setupMission();
+    this.audio.music?.start();
     this.hud.missionBanner();
     this._lockPointer();
     this.state = 'playing';
@@ -725,6 +753,12 @@ export class Game {
     this.missionIdx = 0;
     this.kills = 0; this.shotsFired = 0; this.shotsHit = 0;
     this.elapsed = 0;
+    this.progress.reset();
+    this.weapon.stats = this.progress.stats;
+    this.weapon.reset(true);
+    this.armor = 0;
+    this.grenades = GRENADE.start;
+    this.hud.hidePerks();
     this._setupMission();
     this.state = 'playing';
     this._lockPointer();
@@ -738,17 +772,14 @@ export class Game {
     const m = this._mission();
     this._deembedSpawn(m.spawn);
     this.player.setSpawn(m.spawn);
-    this.player.hp = PLAYER.maxHp;
     this.player.missionTime = 0;
-    this.hud.setHP(this.player.hp);
-    this.weapon.reset();
+    this.weapon.reset(false);
     this.hud.setWeaponName(this.weapon.w.def.label);
     this.hud.setAmmo(this.weapon.w.mag, this.weapon.w.reserve);
-    this.enemyMgr.deploy(m);
     this.enemyMgr.resetRecallClock();
     this.pickups.clear();
+    this.hud.setBoss(null, null);
     this._shotDirty = true;
-    this.enemyMgr.attachAudio(this.audio);
     this.train.reset();
     this.platform.setDoors(false);
     if (STATION_AREAS.has(m.area)) {
@@ -769,6 +800,7 @@ export class Game {
     // bleed-through and keeps draw calls down (same call boot uses).
     this._applyWorldVisibility(m.area);
     this._applyAtmosphere(m);
+    this._armSystems(m);
     // Per-world player physics + special mechanics (moremaps.md mods)
     this._mods = m.mods ?? {};
     this.player.setMods(this._mods);
@@ -788,6 +820,7 @@ export class Game {
     this.hud.setMission(m, this.missionIdx + 1, MISSIONS.length);
     this.hud.setWave(this.enemyMgr.waveInfo());
     this.hud.setTargets(this.enemyMgr.remaining());
+    this.enemyMgr.attachAudio(this.audio);
     this.hud.missionBanner();
   }
 
@@ -800,7 +833,9 @@ export class Game {
     this._advancePending = true;
     this.audio.play('victory', { volume: 0.9 });
     const acc = this.shotsFired ? Math.round((this.shotsHit / this.shotsFired) * 100) : 0;
-    this.hud.showIntermission(this._mission(), MISSIONS[this.missionIdx + 1], this.kills, acc, formatTime(this.elapsed), INTERMISSION.seconds);
+    const perks = this._offerPerks();
+    const wait = INTERMISSION.seconds + (perks ? 8 : 0);
+    this.hud.showIntermission(this._mission(), MISSIONS[this.missionIdx + 1], this.kills, acc, formatTime(this.elapsed), wait);
     document.getElementById('pause-screen').classList.add('hidden');
     // the window dismisses itself when the countdown runs out — the player
     // never has to click; if they ESC-paused, defer until they are back
@@ -811,14 +846,16 @@ export class Game {
         this._interTO = setTimeout(tryAdvance, 1000);
         return;
       }
+      this._autoPickPerks();
       this._advanceMission(true);
     };
-    this._interTO = setTimeout(tryAdvance, INTERMISSION.seconds * 1000);
+    this._interTO = setTimeout(tryAdvance, wait * 1000);
   }
 
   _advanceMission(auto = false) {
     if (this.missionIdx >= MISSIONS.length - 1) { this.restart(); return; }
     clearTimeout(this._interTO);
+    this._autoPickPerks();
     this._advancePending = false;
     this.missionIdx++;
     this.hud.hideVictory();
@@ -886,6 +923,7 @@ export class Game {
       this.bloomPass.enabled = p.bloom;
       this.bloomPass.strength = p.bloomStrength * (this._bloomScale ?? 1);
     }
+    if (this.gradePass) this.gradePass.enabled = p.bloom;
     // shadows
     this.renderer.shadowMap.enabled = p.shadows;
     if (this.moon) {
@@ -918,6 +956,7 @@ export class Game {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.composer.setSize(window.innerWidth, window.innerHeight);
+    this.gradePass?.uniforms.uRes.value.set(window.innerWidth, window.innerHeight);
     this._updateParticleScale();
   }
 
@@ -932,10 +971,14 @@ export class Game {
     } else if (e.code === 'KeyM' && this.audio.ready) {
       this.audio.setMuted(!this.audio.muted);
     } else if (this.state === 'playing') {
-      if (e.code === 'KeyR') this.weapon.startReload();
-      else if (e.code === 'Digit1') this.weapon.switchTo(0);
-      else if (e.code === 'Digit2') this.weapon.switchTo(1);
-      else if (e.code === 'Digit3') this.weapon.switchTo(2);
+      const digit = /^Digit([1-6])$/.exec(e.code);
+      if (digit && this._advancePending && this._perkChoices?.length && +digit[1] <= 3) {
+        this._choosePerk(+digit[1] - 1);       // intermission: 1/2/3 pick a perk
+      } else if (digit) {
+        this.weapon.switchTo(+digit[1] - 1);
+      } else if (e.code === 'KeyR') this.weapon.startReload();
+      else if (e.code === 'KeyG') this._throwGrenade();
+      else if (e.code === 'KeyQ') this.weapon.cycle(-1);
     }
   }
 
@@ -945,96 +988,81 @@ export class Game {
     const def = this.weapon.fire();
     const ctx = this.lastMoveCtx;
     if (!ctx) return;
+    const S = this.progress.stats;
     const spread = this.weapon.currentSpread(ctx);
+    const adsK = 1 - this.weapon.ads * 0.4;
 
     // camera recoil + shake + crosshair — the transient punch deepens as the
     // spray pattern heats up (see WeaponController.fire / RECOIL config)
-    this.player.addRecoil(def.kick * 0.011 * (0.4 + 0.9 * this.weapon.sprayNorm));
-    this.player.shake(0.004 * def.kick);
+    this.player.addRecoil(def.kick * 0.011 * (0.4 + 0.9 * this.weapon.sprayNorm) * S.recoilMul * adsK);
+    this.player.shake(0.004 * def.kick * adsK);
     this.hud.setFiring(true);
     clearTimeout(this._fireClassTO);
     this._fireClassTO = setTimeout(() => this.hud.setFiring(false), 60);
 
-    // muzzle world position for hearing
     const mp = this.weapon.w.muzzle.getWorldPosition(this._scratch);
     if (this._mods?.underwater) this.particles.bubblePuff(mp.x, mp.y, mp.z, 5);
-
-    // enemies hear the shot
     this.hearCd -= 1;
     if (this.hearCd <= 0) { this.enemyMgr.hearAll(mp); this.hearCd = 6; }
 
-    // raycast pellets (scratch vectors — full-auto should allocate ~nothing)
-    const dir = this._shotDir ?? (this._shotDir = new THREE.Vector3());
-    this.camera.getWorldDirection(dir);
-    const up = this._shotUp ?? (this._shotUp = new THREE.Vector3(0, 1, 0));
-    const right = this._shotRight ?? (this._shotRight = new THREE.Vector3());
-    right.crossVectors(dir, up).normalize();
-    up.crossVectors(right, dir).normalize();
-    // env ∩ hit-mesh target list is rebuilt only when the world or the
-    // roster actually changed (respawn / kill / shatter) — not per shot
-    if (this._shotDirty || !this._shotTargets) {
-      this._shotTargets = this.envMeshes.concat(this.enemyMgr.hitMeshes);
-      this._shotDirty = false;
-    }
-    const targets = this._shotTargets;
-
-    for (let p = 0; p < def.pellets; p++) {
-      this.shotsFired++;
-      const jx = (Math.random() + Math.random() - 1) * spread;
-      const jy = (Math.random() + Math.random() - 1) * spread;
-      const shot = dir.clone()
-        .addScaledVector(right, jx)
-        .addScaledVector(up, jy)
-        .normalize();
-      this._raycaster.set(this.camera.position, shot);
-      this._raycaster.far = def.range;
-      const hits = this._raycaster.intersectObjects(targets, false);
-      if (!hits.length) continue;
-      const hit = hits[0];
-      const enemy = hit.object.userData.enemy;
-
-      if (enemy && enemy.state !== 'DEAD') {
-        this.shotsHit++;
-        const head = hit.object.userData.part === 'head';
-        const killed = enemy.applyDamage(def.damage, hit.object.userData.part, -shot.x, -shot.z, {
-          particles: this.particles,
-          audio: this.audio,
-          raycaster: this._raycaster,
-          envMeshes: this.envMeshes,
-          hitPoint: hit.point,
-          onKilled: (e, hs) => this._onEnemyKilled(e, hs),
-          onPlayerDamage: (n) => this._damagePlayer(n),
-          world: this.world,
-          playerPos: this.player.position,
-        });
-        this.hud.hitMarker(head);
-        this.audio.play(head ? 'headshot' : 'hitMarker', { volume: 0.7 });
-        if (head) {
-          this.player.shake(0.008);
-          this._slowmo(SLOWMO.headshot);
-          this._addHSPop(enemy);           // small floating tag over the head
+    if (def.projectile) {
+      this._fireProjectile(def);
+    } else {
+      // raycast pellets (scratch vectors — full-auto should allocate ~nothing)
+      const dir = this._shotDir ?? (this._shotDir = new THREE.Vector3());
+      this.camera.getWorldDirection(dir);
+      const up = this._shotUp ?? (this._shotUp = new THREE.Vector3());
+      up.set(0, 1, 0);
+      const right = this._shotRight ?? (this._shotRight = new THREE.Vector3());
+      right.crossVectors(dir, up).normalize();
+      up.crossVectors(right, dir).normalize();
+      const targets = this._rayTargets();
+      const shot = this._shotVec ?? (this._shotVec = new THREE.Vector3());
+      for (let p = 0; p < def.pellets; p++) {
+        this.shotsFired++;
+        const jx = (Math.random() + Math.random() - 1) * spread;
+        const jy = (Math.random() + Math.random() - 1) * spread;
+        shot.copy(dir).addScaledVector(right, jx).addScaledVector(up, jy).normalize();
+        this._raycaster.set(this.camera.position, shot);
+        this._raycaster.far = def.range;
+        const hits = this._raycaster.intersectObjects(targets, false);
+        // DMR rounds over-penetrate: they pass through `pierce` bodies
+        let pierce = def.pierce ?? 0;
+        const struck = new Set();
+        for (const hit of hits) {
+          const enemy = hit.object.userData.enemy;
+          if (enemy) {
+            if (struck.has(enemy) || enemy.state === 'DEAD') continue;
+            struck.add(enemy);
+            const part = hit.object.userData.part;
+            this._hitEnemy(enemy, part, def.damage * (struck.size > 1 ? 0.7 : 1), shot, hit.point);
+            if (part === 'shield' || pierce-- <= 0) break;
+            continue;
+          }
+          if (hit.object.userData.barrel) {
+            this.props.hitBarrel(hit.object, def.damage * S.dmgMul);
+            this.audio.play('impactMetal', { volume: 0.6, rate: rand(0.8, 1) });
+            this.particles.addDecal(hit.point, hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : shot.clone().negate());
+            break;
+          }
+          this._environmentImpact(hit, shot);
+          break;
         }
-        void killed;
-      } else {
-        this._environmentImpact(hit, shot);
       }
     }
 
     // CS-style view climb — permanent camera-pitch kick applied AFTER the
     // raycast: this shot goes where you aimed, the next one starts higher.
-    // Sustained fire ramps the climb per shot (climbMin → climbMax across
-    // sprayRamp shots); slow fire only ever pays climbMin, i.e. nothing.
     const cm = def.climbMin ?? 0.0015;
     const cx = def.climbMax ?? 0.008;
     const knee = def.climbKnee ?? 0;
     let t = this.weapon.sprayNorm;
     if (knee && this.weapon.spray > 0) {
       const n = this.weapon.spray;
-      // gentle for the first `knee` shots, ACCELERATED climb after
       t = n <= knee ? 0.12 * (n / knee)
                     : 0.12 + 0.88 * Math.min((n - knee) / Math.max((def.sprayRamp ?? 8) - knee, 1), 1);
     }
-    this.player.addPitch(cm + (cx - cm) * t);
+    this.player.addPitch((cm + (cx - cm) * t) * S.recoilMul * adsK);
 
     this._syncHudAmmo();
   }
@@ -1051,10 +1079,7 @@ export class Game {
           if (e.state === 'DEAD') continue;
           const dx = e.group.position.x - px, dz = e.group.position.z - pz;
           if (dx * dx + dz * dz < 9) {
-            e.applyDamage(45, 'body', dx * 0.2, dz * 0.2, {
-              particles: this.particles, audio: this.audio,
-              hitPoint: new THREE.Vector3(px, 1.2, pz),
-            });
+            e.applyDamage(45, 'body', dx * 0.2, dz * 0.2, this._hitCtx(new THREE.Vector3(px, 1.2, pz)));
           }
         }
       }
@@ -1072,10 +1097,7 @@ export class Game {
           if (e.state === 'DEAD') continue;
           const dx = e.group.position.x - px, dz = e.group.position.z - pz;
           if (dx * dx + dz * dz < 12) {
-            e.applyDamage(52, 'body', dx * 0.2, dz * 0.2, {
-              particles: this.particles, audio: this.audio,
-              hitPoint: new THREE.Vector3(px, 1.2, pz),
-            });
+            e.applyDamage(52, 'body', dx * 0.2, dz * 0.2, this._hitCtx(new THREE.Vector3(px, 1.2, pz)));
           }
         }
       }
@@ -1109,7 +1131,7 @@ export class Game {
         if (mesh.userData.shatter && mesh.visible) {
           mesh.visible = false;
           this.envMeshes = this.envMeshes.filter((m) => m !== mesh);
-          this._shotDirty = true;
+          this._refreshEnvActive();
         }
         break;
       default: this.audio.play('impactConcrete', { volume: 0.6, rate: rand(0.9, 1.12) }); break;
@@ -1128,12 +1150,7 @@ export class Game {
     const world = this.player.world || this.world;
     if (!world) return;
     const R = 0.45;
-    const solid = (x, z) => {
-      for (const b of world.all())
-        if (b.max.x > x - R && b.min.x < x + R && b.max.z > z - R && b.min.z < z + R &&
-            b.max.y > 0.1 && b.min.y < 2.0) return true;
-      return false;
-    };
+    const solid = (x, z) => blockedAt(world, x, z, R, 0, 2.0);
     if (!solid(sp.x, sp.z)) return;
     for (let ring = 1; ring <= 8; ring++) {
       const d = ring * 0.8;
@@ -1167,44 +1184,6 @@ export class Game {
     this.hud.targetPips?.(rel);
   }
 
-  _onEnemyKilled(enemy, headshot) {
-    this.kills++;
-    this.pickups.spawnFrom(enemy);        // salvage drops (medkit / ammo)
-    this.hud.killFeed(headshot);
-    this.hud.setTargets(this.enemyMgr.remaining());
-    this.enemyMgr.removeHitMeshes(enemy);
-    this._shotDirty = true;
-    this.player.shake(0.01);
-    this.audio.play('headshot', { volume: 0.4, rate: 0.8 });
-
-    if (this.enemyMgr.remaining() === 0) {
-      this._slowmo(SLOWMO.finalKill);
-      const isFinal = this.missionIdx >= MISSIONS.length - 1;
-      setTimeout(() => { if (isFinal) this._victory(); else this._intermission(); }, 650);
-    } else if (headshot) {
-      // extra punch for headshot kills
-      this._slowmo({ scale: 0.14, duration: 0.09 });
-    }
-  }
-
-  _damagePlayer(n) {
-    if (this.state !== 'playing') return;
-    this.hud.flashDamage();
-    const hp = this.player.damage(n);
-    if (hp <= 0) {
-      // overrun — redeploy at a RANDOM open point far from the live
-      // hostiles (the fixed gate respawn meant walking out into a
-      // firing squad every death). Partial refill only; full heals are
-      // medkit-only. No hearAll: the insertion is meant to be quiet.
-      this.player.setSpawn(this._pickRespawnPoint());
-      this.player.hp = PLAYER.overrunHp;
-      this.player.shake(0.03);
-      this.hud.showDowned();              // WHY you woke up somewhere new
-      this.hud.missionBanner();            // and which mission you're in
-    }
-    this.hud.setHP(this.player.hp);
-  }
-
   /** Random safe redeploy point: open ground inside the arena bounds,
    *  >=16 m from every live hostile when findable, facing arena center.
    *  Falls back to the mission spawn if nothing clears. */
@@ -1213,12 +1192,7 @@ export class Game {
     const b = this._arenaRect;
     if (!b) return { ...m.spawn };
     const world = this.player.world || this.world;
-    const solid = (x, z) => {
-      for (const bb of world.all())
-        if (bb.max.x > x - 0.5 && bb.min.x < x + 0.5 && bb.max.z > z - 0.5 && bb.min.z < z + 0.5 &&
-            bb.max.y > 0.1 && bb.min.y < 2.0) return true;
-      return false;
-    };
+    const solid = (x, z) => blockedAt(world, x, z, 0.5, 0, 2.0);
     const live = this.enemyMgr.enemies.filter((e) => e.state !== 'DEAD');
     const pad = 2.5;
     if (b.x1 - b.x0 < pad * 3 || b.z1 - b.z0 < pad * 3) return { ...m.spawn };
@@ -1240,21 +1214,6 @@ export class Game {
   }
 
   _slowmo(cfg) { this.slow.t = cfg.duration; this.slow.scale = cfg.scale; }
-
-  /** Grabbed a salvage drop: medkit patches HP, ammo restocks every weapon. */
-  _collect(kind) {
-    if (kind === 'medkit') {
-      this.player.hp = Math.min(PLAYER.maxHp, this.player.hp + DROPS.medkitHp);
-      this.hud.setHP(this.player.hp);
-      this.audio.play('medkit', { volume: 0.8 });
-      this.hud.pickupToast(`✚ +${DROPS.medkitHp} HP · 応急処置 MEDKIT`);
-    } else {
-      this.weapon.addReserve(null, DROPS.ammoRounds);
-      this._syncHudAmmo();
-      this.audio.play('pickup', { volume: 0.8 });
-      this.hud.pickupToast(`▮ +${DROPS.ammoRounds} ROUNDS · 弾薬補給 AMMO`);
-    }
-  }
 
   // ---------- headshot tags (small text floating over the struck head) ----------
 
@@ -1399,7 +1358,6 @@ export class Game {
     const locked = this.player.controls.isLocked;
     const ctx = this.player.update(dt, this.keys, locked, this.time);
     this.lastMoveCtx = ctx;
-    this.hud.setHP(this.player.hp);
 
     // containment guard: every themed arena is a sealed room, and this
     // backstop keeps the player inside their own map at any geometry
@@ -1454,6 +1412,9 @@ export class Game {
       if (this.weapon.w.mag === 0 && this.weapon.reloadT < 0) {
         this.weapon.startReload();
         this.hud.reloading(true);
+      } else if (this.weapon.w.mag === 0 && !this._semiLatch) {
+        this._semiLatch = true;
+        this.audio.play('dryFire', { volume: 0.6 });
       } else if (this.weapon.canFire() && (def.auto || !this._semiLatch)) {
         this._semiLatch = true;
         this._fireOnce();
@@ -1478,7 +1439,7 @@ export class Game {
       addTracer: (a, b) => this.particles.addTracer(a, b),
       addMuzzleLight: (p) => this._addMuzzleLight(p),
       playerShake: (a) => this.player.shake(a),
-      onPlayerDamage: (n) => this._damagePlayer(n),
+      onPlayerDamage: (n, src) => this._damagePlayer(n, src),
       onWave: (info) => {
         this.hud.waveAlert(info);
         this.hud.setWave(info);
@@ -1491,11 +1452,13 @@ export class Game {
       },
     };
     this._enemyCtx.playerCrouch = ctx.crouching;
-    this._enemyCtx.envMeshes = this.envMeshes;
+    this._rayTargets();
+    this._enemyCtxExtras(this._enemyCtx);
     this._enemyCtx.gapScale = md.gapScale ?? 1;
     this._enemyCtx.bubbles = !!md.underwater;
     this._enemyCtx.arena = this._arenaRect;
     this.enemyMgr.update(dt, this._enemyCtx);
+    this._syncExplodeEnemies();
     this._targetPips();
     this._updateMuzzleFX(dt);
 
@@ -1552,10 +1515,7 @@ export class Game {
         if (dx * dx + dz * dz < q.r * q.r) { zoneSlow = Math.min(zoneSlow, 0.45); }
       }
     }
-    if (this._zoneSlow !== zoneSlow) {
-      this._zoneSlow = zoneSlow;
-      this.player.sScale = (md.speedScale ?? 1) * zoneSlow;
-    }
+    this._zoneSlow = zoneSlow;          // folded into player speed by _updateSystems
 
     // water-channel jets (atlantis): ride a current for fast traversal
     if (md.currents) {
@@ -1632,6 +1592,8 @@ export class Game {
     }
     if (this._cargoCd > 0) this._cargoCd -= dt;
 
+    this._updateSystems(dt, ctx, locked);
+
     // weapon switch reload HUD
     this._syncHudAmmo();
     this.hud.setWeaponName(this.weapon.w.def.label);
@@ -1650,3 +1612,6 @@ export class Game {
     }
   }
 }
+
+// gameplay layer (objectives, progression, explosives, props, weather, HUD glue)
+Object.assign(Game.prototype, GameSystems);

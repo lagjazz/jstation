@@ -33,12 +33,37 @@
   <div id="hud-ammo">
     <div id="ammo-line"><span id="ammo-mag">30</span><span id="ammo-sep"> / </span><span id="ammo-reserve">120</span></div>
     <div id="ammo-weapon">AR-15 ASSAULT</div>
+    <div id="hud-gren">⬣ FRAG [G] <span id="gren-num">2/3</span></div>
+    <div id="hud-slots"></div>
   </div>
 
   <div id="hud-hp">
     <div id="hp-label">HP <span id="hp-num">100</span></div>
     <div id="hp-bar"><div id="hp-fill"></div></div>
+    <div id="hud-armor" class="empty">
+      <div id="armor-label">ARMOR <span id="armor-num">0</span></div>
+      <div id="armor-bar"><div id="armor-fill"></div></div>
+    </div>
+    <div id="hud-xp"><span id="xp-lvl">LV 1</span><div id="xp-bar"><div id="xp-fill"></div></div></div>
+    <div id="buffs"></div>
   </div>
+
+  <div id="hud-obj">
+    <div id="obj-title">ELIMINATE · 殲滅</div>
+    <div id="obj-detail"></div>
+    <div id="obj-bar" class="hidden"><div id="obj-fill"></div></div>
+  </div>
+
+  <div id="boss-bar" class="hidden">
+    <div id="boss-name">COMMANDER</div>
+    <div id="boss-track"><div id="boss-fill"></div></div>
+  </div>
+
+  <div id="markers"></div>
+  <div id="dmg-ind"></div>
+  <div id="gren-warn"></div>
+  <div id="scope"><div class="sc-h"></div><div class="sc-v"></div></div>
+  <div id="lvl-toast"></div>
 
   <div id="hud-targets">
     <div id="mission-ind">MISSION 01 / 16</div>
@@ -58,6 +83,7 @@
     <div class="mb-1">MISSION 01</div>
     <div class="mb-2">SECURE THE STATION</div>
     <div class="mb-3">Eliminate all hostile targets.</div>
+    <div class="mb-4" id="mb-4"></div>
   </div>
 </div>
 
@@ -68,7 +94,7 @@
   <div>TRIANGLES: <span id="d-tris">--</span></div>
   <div>PARTICLES: <span id="d-parts">--</span></div>
   <div>QUALITY: <span id="d-quality">HIGH</span></div>
-  <div id="d-hint">[F3] toggle · [1/2/3] weapon · [M] mute</div>
+  <div id="d-hint">[F3] toggle · [1-6] weapon · [G] grenade · [RMB] aim · [M] mute</div>
 </div>
 
 <!-- ============ PAUSE ============ -->
@@ -98,8 +124,16 @@
       <div class="v-stat"><span class="v-k">ACCURACY</span><span class="v-v" id="v-accuracy">0%</span></div>
       <div class="v-stat"><span class="v-k">TIME</span><span class="v-v" id="v-time">00:00</span></div>
     </div>
+    <div id="perk-row" class="hidden"></div>
     <div class="ps-hint" id="v-hint">CLICK TO RESTART</div>
   </div>
+</div>
+
+<!-- ============ FAILED (objective lost → retry) ============ -->
+<div id="fail-card" class="hidden">
+  <div class="f-title">MISSION FAILED · 任務失敗</div>
+  <div class="f-sub"></div>
+  <div class="f-hint">RETRYING SECTOR…</div>
 </div>
 
 <!-- ============ DOWNED (HP zero respawn notice) ============ -->
@@ -117,8 +151,9 @@
     <div class="s-divider"></div>
     <div class="s-controls">
       <span><b>WASD</b> MOVE</span><span><b>SHIFT</b> SPRINT</span><span><b>SPACE</b> JUMP</span>
-      <span><b>CTRL</b> CROUCH</span><span><b>LMB</b> FIRE</span><span><b>R</b> RELOAD</span>
-      <span><b>1 / 2 / 3</b> WEAPON</span><span><b>F3</b> DEBUG</span><span><b>ESC</b> UNLOCK</span>
+      <span><b>CTRL</b> CROUCH</span><span><b>LMB</b> FIRE</span><span><b>RMB</b> AIM</span>
+      <span><b>R</b> RELOAD</span><span><b>G</b> GRENADE</span><span><b>1–6 / WHEEL / Q</b> WEAPON</span>
+      <span><b>F3</b> DEBUG</span><span><b>M</b> MUTE</span><span><b>ESC</b> UNLOCK</span>
     </div>
     <label class="q-label">GRAPHICS QUALITY
       <select id="start-quality" class="q-select">
@@ -129,7 +164,7 @@
       </select>
     </label>
     <div class="s-start">CLICK TO START</div>
-    <div class="s-mission">15-SECTOR CAMPAIGN · MISSION 01 SECURE THE CONCOURSE · HOSTILES ARRIVE IN WAVES</div>
+    <div class="s-mission">15-SECTOR CAMPAIGN · RANDOM OBJECTIVES, WEATHER &amp; COVER EVERY RUN · LEVEL UP AND PICK PERKS BETWEEN SECTORS</div>
   </div>
 </div>
 

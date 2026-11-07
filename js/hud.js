@@ -48,22 +48,40 @@ export class HUD {
   show() { this.el.hud.classList.remove('hidden'); }
   hide() { this.el.hud.classList.add('hidden'); }
 
+  // Per-frame setters write the DOM only when the shown value changes:
+  // a textContent/style write — even of an identical value — invalidates
+  // style + layout, and the game calls these every frame.
+  _txt(el, v) {
+    const k = '_v';
+    if (el[k] === v) return;
+    el[k] = v;
+    el.textContent = v;
+  }
+
   setAmmo(mag, reserve) {
-    this.el.mag.textContent = mag;
-    this.el.reserve.textContent = reserve;
-    this.el.ammoLine.classList.toggle('low', mag === 0);
+    this._txt(this.el.mag, String(mag));
+    this._txt(this.el.reserve, String(reserve));
+    if (this._lowAmmo !== (mag === 0)) {
+      this._lowAmmo = mag === 0;
+      this.el.ammoLine.classList.toggle('low', this._lowAmmo);
+    }
   }
 
-  setWeaponName(name) { this.el.weaponName.textContent = name; }
+  setWeaponName(name) { this._txt(this.el.weaponName, name); }
 
-  setHP(hp) {
-    this.el.hpNum.textContent = Math.ceil(hp);
-    this.el.hpFill.style.width = `${Math.max(0, hp)}%`;
-    this.el.hpBar.classList.toggle('low', hp < 35);
-    this.el.damage.classList.toggle('lowhp', hp < 30);
+  setHP(hp, maxHp = 100) {
+    const shown = Math.max(0, Math.ceil(hp));
+    const key = shown * 1000 + Math.round(maxHp);
+    if (this._hpKey === key) return;
+    this._hpKey = key;
+    const frac = shown / maxHp;
+    this.el.hpNum.textContent = shown;
+    this.el.hpFill.style.width = `${Math.min(100, frac * 100)}%`;
+    this.el.hpBar.classList.toggle('low', frac < 0.35);
+    this.el.damage.classList.toggle('lowhp', frac < 0.3);
   }
 
-  setTargets(n) { this.el.targets.textContent = n; }
+  setTargets(n) { this._txt(this.el.targets, String(n)); }
 
   /** "WAVE 2/3" tick under the target counter (mission wave plan). */
   setWave(info) {
@@ -168,7 +186,11 @@ export class HUD {
     hm.classList.add('show');
   }
 
-  reloading(on) { this.el.reload.classList.toggle('show', on); }
+  reloading(on) {
+    if (this._reloadOn === on) return;
+    this._reloadOn = on;
+    this.el.reload.classList.toggle('show', on);
+  }
 
   killFeed(headshot) {
     const row = document.createElement('div');

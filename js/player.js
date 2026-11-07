@@ -82,7 +82,7 @@ export class Player {
   _supportY(px, pz, feetY) {
     let top = this.floorPlane ? 0 : -Infinity;
     const r = PLAYER.radius;
-    const boxes = this.world.all();
+    const boxes = this.world.near(px, pz, r + 0.05);
     for (let i = 0; i < boxes.length; i++) {
       const b = boxes[i];
       if (px + r > b.min.x && px - r < b.max.x &&
@@ -163,7 +163,9 @@ export class Player {
     // ---- integrate + collide ----
     const height = crouching ? PLAYER.height * 0.72 : PLAYER.height;
     const dx = this.vel.x * dt, dz = this.vel.y * dt;
-    moveAndSlide(this.feet, dx, dz, PLAYER.radius, height, this.world);
+    // step-assist: kerbs / stair treads / low crates are walked onto
+    moveAndSlide(this.feet, dx, dz, PLAYER.radius, height, this.world,
+      this.grounded ? PLAYER.stepUp : PLAYER.stepUp * 0.7);
 
     // ---- jump / gravity ----
     // Support = the y=0 arena plane (most missions) OR the top of any
@@ -211,14 +213,14 @@ export class Player {
     this.prevExtra.y = extraY;
 
     // ---- camera position (fully owned here) ----
-    const posOff = new THREE.Vector3(n2 * this.shakeAmt * 0.35, n3 * this.shakeAmt * 0.4, n1 * this.shakeAmt * 0.35);
+    const posOff = this.prevPosOff.set(n2 * this.shakeAmt * 0.35, n3 * this.shakeAmt * 0.4, n1 * this.shakeAmt * 0.35);
     this.camera.position.set(this.feet.x + posOff.x, this.feet.y + this.eye + posOff.y, this.feet.z + posOff.z);
-    this.prevPosOff.copy(posOff);
 
     // ---- sprint FOV ----
-    const targetFov = sprinting ? PLAYER.fovSprint : PLAYER.fov;
+    // ADS zoom divides the FOV (weapon.zoom(), set by the game each frame)
+    const targetFov = (sprinting ? PLAYER.fovSprint : PLAYER.fov) / (this.fovZoom ?? 1);
     if (Math.abs(this.camera.fov - targetFov) > 0.02) {
-      this.camera.fov = damp(this.camera.fov, targetFov, 6, dt);
+      this.camera.fov = damp(this.camera.fov, targetFov, this.fovZoom > 1.01 ? 14 : 6, dt);
       this.camera.updateProjectionMatrix();
     }
 
