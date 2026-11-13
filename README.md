@@ -157,6 +157,84 @@ sky) and banner. The intermission window auto-advances after
   follow the animation; grenades and launcher rounds bounce off real
   colliders.
 
+### Pacing & balance pass (v3)
+
+All tuning lives in `config.js` (`DIRECTOR`, `ENEMY`, `DROPS`, `MISSIONS`).
+
+- **Combat director** (`js/director.js`): only 2–4 hostiles may fire at
+  once (attack tokens — the rest strafe, flank or hold cover);
+  reinforcements queue up and walk in one at a time, at least 18 m from
+  you, and the live head-count is capped (4 on MISSION 01 → 8 late).
+- **Redeploy grace**: going down brings you back at the point farthest
+  from every hostile, shielded for 4.5 s and unseen for 3 s; the squad
+  loses your trail, every weapon is topped up to two magazines, and each
+  death in a mission softens incoming damage by 10 % (floor 60 %).
+- **Supply**: a never-expiring ammo + medkit cache at the entry, one
+  mid-field and one deep in the arena; ammo boxes give one magazine per
+  owned weapon; drops become near-certain when you are dry or badly hurt.
+- **Enemies**: marksmen telegraph with a laser that locks 0.24 s before
+  the shot (sprint out of it or break line of sight); a headshot or a
+  heavy hit staggers and cuts the burst; the commander (≈650 HP on MISSION 03, was
+  ≈1,740; it scales up in later elite missions) throws a three-grenade barrage, calls two escorts
+  at 66 % / 33 % — each call also triggers a supply drop for you — and
+  enrages in the last third.
+- **Maps**: the sakura garden is rebuilt as a 30 × 44 m walled stroll
+  garden (`js/garden.js`: tea pavilion, pond, torii, stone lanterns,
+  dry-stone walls and boulders as cover); the concourse and platform get
+  structured cover islands (`js/hallDress.js`). A first attempt at a
+  mission plays its authored objective; retries roll the pool.
+- **Image**: bloom input is clamped (specular fireflies no longer turn
+  into screen-filling blobs), per-mission sky fill, and the viewmodel sits
+  low-right, parallel to the view instead of across the crosshair.
+
+### World fidelity pass (v4)
+
+- **Surface detail on every building** (`js/surfaceDetail.js`): tileable
+  detail sets are synthesised at boot — poured concrete with form-panel
+  seams and tie holes, coursed ashlar, riveted steel plate, hull
+  panelling, strata rock, timber planks, cracked ice, floor tile — each a
+  normal map plus an albedo/roughness map, and projected in **world
+  space** (triplanar) through the standard PBR shader. Every wall, floor
+  and prop in all 16 worlds gets the right class from its impact tag,
+  world and metalness, at one texel density, with no UV work. Moving
+  meshes (trains, turning gears) are detected at boot and use the
+  object-space variant. LOW quality skips the pass.
+- **Night city** (`js/skyline.js`): tiered towers with parapets, roof
+  plant, masts with aviation beacons and neon signs; windows are drawn by
+  the shader on a 2.6 m × 3.3 m world-space grid (lit rooms, office
+  floors, blinds, shop fronts). Three districts now frame the station.
+- **Station architecture** (`js/stationArch.js`): wainscot, pilasters with
+  bases and capitals, string course, cornice with a light cove, coffered
+  ceiling beams, services run, column collars and flared capitals, canopy
+  rafters / knee braces / fascia, a platform clock.
+- **Arena cover + walls** (`js/arenaDress.js`): MISSIONS 04–15 get a
+  fixed, evenly spread field of themed cover islands (a third of them
+  full-height) laid out by farthest-point sampling around each world's
+  anchors, patrol routes and mechanics; the five sealed-room arenas also
+  get engaged piers along their perimeter walls. Random props are halved.
+- **Actors**: the rifle is remodelled (free-float handguard, M-LOK slots,
+  holographic sight, curved magazine, skeleton stock); all viewmodels sit
+  shouldered instead of floating; enemy palettes are lifted out of
+  near-black and every class carries its colour on chest/back light bars,
+  arm bands and shoulder patches.
+
+### Tests
+
+Dev-only tooling (the game itself still has no runtime dependencies):
+
+```bash
+npm install            # three + playwright-core, for tests only
+npm test               # 91 unit tests (node --test), ~2 s
+npm run test:coverage  # same, enforcing ≥ 80 % on the logic modules
+npm run test:e2e       # boots the real game in headless Chrome, sweeps all 15 missions
+```
+
+Unit tests cover the director, spawn queue / attack tokens / stagger /
+marksman lock on the real `Enemy` code, objectives, pickups, collision,
+progression, arena layout, surface-detail classification, skyline layout
+and config balance invariants (e.g. "the starting rifle can kill every
+boss with half its ammo"). Rendering code is exercised by the e2e sweep.
+
 ### Performance
 
 - Enemies: ~12 draw calls each (was ~43), geometry cached per class;
@@ -178,6 +256,13 @@ jstation/
 ├── css/style.css       # minimal military-style UI
 ├── js/
 │   ├── main.js         # bootstrap
+│   ├── director.js     # combat pacing: attack tokens, head-count cap, redeploy grace, mercy
+│   ├── arenaDress.js   # MISSION 04–15 cover-island layout + themed pieces + wall piers
+│   ├── surfaceDetail.js# procedural PBR detail maps, triplanar shader injection
+│   ├── skyline.js      # night city: tiered towers, shader windows, beacons
+│   ├── stationArch.js  # concourse / platform architectural trim
+│   ├── garden.js       # MISSION 03 stroll garden (geometry, colliders, lanterns, trees)
+│   ├── hallDress.js    # concourse / platform cover islands + contact-shadow decals
 │   ├── game.js         # master assembly: renderer / post / missions / fire pipeline
 │   ├── config.js       # every tunable number (weapons, player, enemies, quality)
 │   ├── layout.js       # station coordinates

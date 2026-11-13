@@ -94,7 +94,7 @@ export class HUD {
   waveAlert(info) {
     const el = this.el.waveAlert;
     if (!el) return;
-    el.textContent = `⚠ REINFORCEMENTS · 増援確認 — WAVE ${info.current}/${info.total}`;
+    el.textContent = `⚠ REINFORCEMENTS 增援确认 — WAVE ${info.current}/${info.total}`;
     el.classList.remove('show');
     void el.offsetWidth;
     el.classList.add('show');
@@ -228,7 +228,7 @@ export class HUD {
       this.el.missionInd.textContent = `MISSION ${String(idx).padStart(2, '0')} / ${total}`;
     this.el.mb1.textContent = m.name1;
     this.el.mb2.textContent = m.name2;
-    this.el.mb3.textContent = `${m.desc} — ${m.jp}`;
+    this.el.mb3.textContent = `${m.desc} — ${m.zh}`;
   }
 
   missionBanner() {
@@ -252,7 +252,7 @@ export class HUD {
       let n = autoSec;
       const tick = () => {
         this.el.vHint.textContent = n > 0
-          ? `AUTO-CONTINUE IN ${n} · 可自由活动`
+          ? `AUTO-CONTINUE IN ${n}s · 自由活动`
           : 'CONTINUING…';
       };
       tick();
@@ -262,17 +262,17 @@ export class HUD {
         tick();
       }, 1000);
     } else {
-      this.el.vHint.textContent = 'CLICK TO CONTINUE';
+      this.el.vHint.textContent = 'CLICK TO CONTINUE 点击继续';
     }
   }
 
   showVictory(kills, accuracy, timeStr, isFinal = false) {
     this.el.victory.classList.remove('live');
-    this.el.vTitle.textContent = isFinal ? 'CAMPAIGN COMPLETE' : 'MISSION COMPLETE';
+    this.el.vTitle.textContent = isFinal ? 'CAMPAIGN COMPLETE · 战役完成' : 'MISSION COMPLETE · 任务完成';
     this.el.vSub.textContent = isFinal
-      ? 'ALL FIFTEEN SECTORS SECURED — 全作戦完了・桜見台駅制圧'
-      : 'SECTOR SECURED — 区域制圧完了';
-    this.el.vHint.textContent = 'CLICK TO RESTART';
+      ? 'ALL 15 SECTORS SECURED — 全部15区肃清 · 樱见台站已解放'
+      : 'SECTOR SECURED — 区域已肃清';
+    this.el.vHint.textContent = 'CLICK TO RESTART 点击重开';
     this.el.vKills.textContent = kills;
     this.el.vAcc.textContent = `${accuracy}%`;
     this.el.vTime.textContent = timeStr;

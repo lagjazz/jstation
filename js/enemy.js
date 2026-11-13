@@ -23,7 +23,7 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { ENEMY, PLAYER, WAVES } from './config.js';
+import { DIRECTOR, ENEMY, PLAYER, WAVES } from './config.js';
 import { cachedBox } from './build.js';
 import { moveAndSlide, blockedAt } from './collision.js';
 import { TEX } from './textures.js';
@@ -72,13 +72,18 @@ export const SPAWN_POOLS = {
     { pos: [6, 17],      wps: [[6, 17], [0, 16], [-5, 18]] },
     { pos: [-22, 23],    wps: [[-22, 23], [-15, 23.5], [-27, 22]] },
   ],
+  // the walled stroll garden (js/garden.js) — anchors sit in open ground
+  // between the cover islands, weighted toward the east (far from the gate)
   garden: [
-    { pos: [14.5, 4],    wps: [[14.5, 4], [20, 6], [14, 9.5], [19, 1]] },
-    { pos: [24, 1],      wps: [[24, 1], [21, -3], [24.5, -5], [19, 2]] },
-    { pos: [15, -6],     wps: [[15, -6], [20, -8], [22.5, -3.5], [17, -1]] },
-    { pos: [24, 11],     wps: [[24, 11], [20, 12.5], [23, 8]] },
-    { pos: [19, 5],      wps: [[19, 5], [15, 2], [22, 3], [18, 10]] },
-    { pos: [13.5, -9],   wps: [[13.5, -9], [18, -8.5], [14, -5.5]] },
+    { pos: [34, 6.5],    wps: [[34, 6.5], [31, 9.5], [37.8, 6.3]] },          // tea pavilion
+    { pos: [38, -14],    wps: [[38, -14], [34.5, -15], [39, -11]] },
+    { pos: [30, -20],    wps: [[30, -20], [25, -19.5], [33.5, -20]] },
+    { pos: [26, 16],     wps: [[26, 16], [22.5, 14.5], [30, 17]] },
+    { pos: [36.5, -5.5], wps: [[36.5, -5.5], [38.5, -2], [37, -10.5]] },      // east of the pond
+    { pos: [22, -14],    wps: [[22, -14], [18.5, -15], [25, -12]] },          // dry garden
+    { pos: [20, 12],     wps: [[20, 12], [17, 14], [23, 13.5]] },
+    { pos: [27, 3],      wps: [[27, 3], [24, 0.8], [30.5, 4.5]] },            // centre
+    { pos: [39, 17],     wps: [[39, 17], [36.5, 16], [39.5, 15.5]] },
   ],
 };
 
@@ -101,6 +106,16 @@ function splitWaves(count) {
   }
   return out;
 }
+
+// marksman laser: tracks, then locks LOCK_TIME before the shot; the shot
+// hits if the player is still within LOCK_RADIUS of the locked point
+const LOCK_TIME = 0.24;
+const LOCK_RADIUS = 0.85;
+const _laserGeo = new THREE.BoxGeometry(0.012, 0.012, 1).translate(0, 0, 0.5);
+const _laserMat = new THREE.MeshBasicMaterial({
+  color: new THREE.Color(3, 0.15, 0.1), transparent: true, opacity: 0.85,
+  blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, fog: false,
+});
 
 const randRange = (r) => rand(r[0], r[1]);
 const randInt = (r) => Math.floor(rand(r[0], r[1] + 0.999));
@@ -150,6 +165,11 @@ export class Enemy {
     this.noCover = !!C.noCover;
     this.hasShield = !!C.shield;
     this.sound = C.sound ?? 'enemyShot';
+    this.telegraph = C.telegraph ?? 0;   // seconds of visible laser before a shot
+    this.chargeT = 0;
+    this.lockPt = new THREE.Vector3();
+    this._locked = false;
+    this.laser = null;
 
     this.aimAmt = 0;
     this.recoil = 0;
@@ -419,12 +439,26 @@ export class Enemy {
       this.fallDir = (fx * dirX + fz * dirZ) < 0 ? 1 : -1;
       this.fallSide = rand(-0.35, 0.35);
       this.muzzleFlash.visible = false;
+      this._abortShot(ctx);
       ctx.audio?.play(this.flying ? 'droneDie' : 'enemyDeath', { volume: 0.9, rate: rand(0.92, 1.08) });
       ctx.onKilled?.(this, part === 'head');
       return true;
     }
     if (ctx.audio) ctx.audio.play('enemyGrunt', { volume: 0.55, rate: rand(0.85, 1.15) });
-    if (this.state === ESTATE.HIT) {
+    // a headshot or one heavy hit staggers: the burst is cut short, the
+    // firing slot goes back to the squad and the soldier reels for a moment
+    const ST = DIRECTOR.stagger;
+    const heavy = (part === 'head' || dmg * mult >= this.maxHp * ST.frac) &&
+      !this.boss && !this.flying && this.cls !== 'juggernaut';
+    if (heavy) {
+      if (this.state !== ESTATE.HIT) {
+        this.prevState = (this.state === ESTATE.ATTACK || this.state === ESTATE.COVER) ? this.state : ESTATE.CHASE;
+        this._coverT = this.stateT;
+      }
+      this.state = ESTATE.HIT;
+      this.stateT = ST.time;
+      this._abortShot(ctx);
+    } else if (this.state === ESTATE.HIT) {
       this.stateT = Math.max(this.stateT, 0.2);
     } else if (this.state !== ESTATE.ATTACK && this.state !== ESTATE.COVER && !this.boss) {
       this.prevState = ESTATE.CHASE;
@@ -513,7 +547,7 @@ export class Enemy {
       inCone = diff < (ENEMY.viewAngleDeg * Math.PI / 180) / 2;
     }
     const range = combat ? Math.max(this.viewDistance, this.loseRange) : this.viewDistance;
-    this.seen = this.losOK && dist < range && (combat || inCone || dist < 8);
+    this.seen = !ctx.playerHidden && this.losOK && dist < range && (combat || inCone || dist < 8);
     if (this.seen) { this.lastKnown.copy(playerPos); this.lastSeen = 0; } else this.lastSeen += dt;
     // a still player is a grenade magnet
     this.playerStill = (ctx.playerSpeed ?? 0) < 0.4 ? this.playerStill + dt : 0;
@@ -543,9 +577,16 @@ export class Enemy {
       case ESTATE.SEARCH: this._stSearch(dt, ctx); break;
       case ESTATE.HIT:
         this.stateT -= dt;
-        if (this.stateT <= 0) this.state = this.prevState === ESTATE.PATROL ? ESTATE.CHASE : this.prevState;
+        if (this.stateT <= 0) {
+          this.state = this.prevState === ESTATE.PATROL ? ESTATE.CHASE : this.prevState;
+          // a stagger must not eat the cover-hold timer it interrupted
+          if (this.state === ESTATE.COVER) this.stateT = this._coverT ?? 1.5;
+        }
         break;
     }
+    // a shot in progress (laser charge / burst) only makes sense while
+    // attacking: leaving ATTACK for cover or a chase drops it cleanly
+    if (this.state !== ESTATE.ATTACK && (this.chargeT > 0 || this.burstLeft > 0)) this._abortShot(ctx);
 
     // ---------- pose ----------
     const wantAim = this.state === ESTATE.ATTACK || (this.state === ESTATE.COVER && this.crouch > 0.5);
@@ -725,22 +766,93 @@ export class Enemy {
   _trigger(dt, ctx, dist) {
     if (this.reloadT > 0 || this.reactT > 0) return;
     if (this.ammo <= 0) { this._reload(ctx); return; }
+    if (this.chargeT > 0) { this._charge(dt, ctx, dist); return; }
     if (this.burstLeft > 0) {
       this.burstT -= dt;
       if (this.burstT <= 0) {
         this._fire(ctx, dist);
         this.burstLeft--;
         this.burstT = this.bigShot ? 0.16 : 0.11;
+        if (this.burstLeft <= 0) ctx.director?.release(this);
       }
       return;
     }
     this.fireCd -= dt;
     if (this.fireCd <= 0) {
-      this.burstLeft = randInt(this.burst);
-      this.burstT = 0;
+      const n = randInt(this.burst);
+      // ask the director for a firing slot; without one, keep manoeuvring
+      // (a squad that takes turns reads as tactics, a wall of fire does not)
+      const hold = this.telegraph + n * (this.bigShot ? 0.16 : 0.11) + 0.3;
+      if (ctx.director && !ctx.director.requestFire(this, hold)) {
+        this.fireCd = ctx.director.retryDelay();
+        this.strafeT = rand(0.5, 1.0);
+        this.strafeDir = chance(0.5) ? 1 : -1;
+        return;
+      }
       this.fireCd = randRange(this.fireGap) / this.fireRateScale * (ctx.gapScale ?? 1);
+      if (this.telegraph) {
+        this.chargeT = this.telegraph;
+        this._locked = false;
+        return;
+      }
+      this.burstLeft = n;
+      this.burstT = 0;
       if (chance(this.flank ? 0.55 : 0.35)) { this.strafeT = rand(0.3, 0.8); this.strafeDir = chance(0.5) ? 1 : -1; }
     }
+  }
+
+  /** Telegraphed shot (marksman): a laser tracks the player, LOCKS for the
+   *  last moment, then the round goes exactly where it locked. Sprinting
+   *  out of the lock or breaking line of sight makes it miss. */
+  _charge(dt, ctx, dist) {
+    const pp = ctx.playerPos;
+    this.chargeT -= dt;
+    if (!this.seen && this.lastSeen > 0.35) { this._abortShot(ctx); this.fireCd = rand(0.6, 1.2); return; }
+    if (!this._locked) {
+      this.lockPt.set(pp.x, pp.y + 1.2, pp.z);
+      if (this.chargeT <= LOCK_TIME) {
+        this._locked = true;
+        ctx.audio?.play('switch', { volume: 0.35, rate: 1.9 });
+      }
+    }
+    this._showLaser(true);
+    if (this.chargeT <= 0) {
+      this.chargeT = 0;
+      this._showLaser(false);
+      this._fire(ctx, dist);
+      ctx.director?.release(this);
+    }
+  }
+
+  _showLaser(on) {
+    if (!on) { if (this.laser) this.laser.visible = false; return; }
+    if (!this.rifleTip) return;
+    if (!this.laser) {
+      this.laser = new THREE.Mesh(_laserGeo, _laserMat);
+      this.laser.frustumCulled = false;
+      this.laser.renderOrder = 5;
+      this.scene.add(this.laser);
+    }
+    this.rifleTip.getWorldPosition(_muzzle);
+    const L = this.laser;
+    L.visible = true;
+    L.position.copy(_muzzle);
+    L.lookAt(this.lockPt);
+    const w = this._locked ? 2.4 : 1;
+    L.scale.set(w, w, _muzzle.distanceTo(this.lockPt));
+  }
+
+  /** Drop whatever shot was in progress (stagger, death, lost sight). */
+  _abortShot(ctx) {
+    this.burstLeft = 0;
+    this.chargeT = 0;
+    this._showLaser(false);
+    ctx?.director?.release(this);
+  }
+
+  /** Remove scene-level helpers (called when the body is reaped). */
+  dispose() {
+    if (this.laser) { this.scene.remove(this.laser); this.laser = null; }
   }
 
   _reload(ctx) {
@@ -786,6 +898,16 @@ export class Enemy {
     if (this.cls === 'bombardier' && ctx.throwGrenade) {
       _aim.set(pp.x + rand(-1.2, 1.2), pp.y, pp.z + rand(-1.2, 1.2));
       ctx.throwGrenade(_muzzle, _aim, { impact: true, speed: 19, dmg: rand(this.dmgMin, this.dmgMax) * 1.3, radius: 3.6, owner: this });
+      return;
+    }
+
+    if (this.telegraph) {
+      // the round lands where the laser locked — did the player get clear?
+      const aim = ctx.scratchAim.copy(this.lockPt);
+      const off = Math.hypot(pp.x - aim.x, pp.y + 1.2 - aim.y, pp.z - aim.z);
+      ctx.addTracer(_muzzle, aim);
+      if (off < LOCK_RADIUS && this.seen) ctx.onPlayerDamage(rand(this.dmgMin, this.dmgMax), this);
+      else ctx.nearMiss?.(this);
       return;
     }
 
@@ -1013,6 +1135,8 @@ export class EnemyManager {
     this.boss = null;
     this.lastPattern = 'standard';
     this.kills = 0;
+    this._queue = [];
+    this._queueT = 0;
   }
 
   /**
@@ -1046,10 +1170,12 @@ export class EnemyManager {
   }
 
   _clearAll() {
-    for (const e of this.enemies) this.scene.remove(e.group);
+    for (const e of this.enemies) { this.scene.remove(e.group); e.dispose(); }
     this.enemies = [];
     this.hitMeshes = [];
     this._wavePlan = [];
+    this._queue = [];
+    this._queueT = 0;
     this.boss = null;
     this.trickle = null;
   }
@@ -1086,8 +1212,11 @@ export class EnemyManager {
       const side = fwd ? (dx * -fwd.z + dz * fwd.x) / d : 0;
       return { i, d, dot, side, r: Math.random() };
     });
-    const far = info.filter((a) => a.d > 13);
-    const src = far.length >= Math.min(n, 2) ? far : info;
+    // never drop in on top of the player: far anchors only, and when the
+    // arena has too few of those, the farther half of what is left
+    const far = info.filter((a) => a.d > DIRECTOR.spawnMinDist);
+    const src = far.length >= Math.min(n, 2) ? far
+      : info.slice().sort((a, b) => b.d - a.d).slice(0, Math.max(2, Math.ceil(info.length / 2)));
     let order;
     switch (pattern) {
       case 'flank': order = src.sort((a, b) => a.dot - b.dot + (a.r - b.r) * 0.3); break;   // behind you
@@ -1111,7 +1240,10 @@ export class EnemyManager {
     for (let i = 0; i < n; i++) {
       const anchorIdx = anchors.length ? anchors[i % anchors.length] : Math.floor(Math.random() * pool.length);
       const cls = this._rollClass(bag, i);
-      this._spawnOne(cls, anchorIdx, ctx, pattern, i);
+      // the opening deployment is already in place; reinforcements queue
+      // up and walk in one at a time (see _drainQueue)
+      if (!ctx) this._spawnOne(cls, anchorIdx, ctx, pattern, i);
+      else this._queue.push({ cls, anchorIdx, pattern, i });
     }
     this._waveIdx++;
   }
@@ -1148,13 +1280,51 @@ export class EnemyManager {
     return e;
   }
 
+  /** Feed queued reinforcements onto the field: one at a time, only while
+   *  the live head-count is under the director's cap, re-checking that the
+   *  chosen anchor is still far from where the player is NOW. */
+  _drainQueue(dt, ctx) {
+    if (!this._queue.length) return;
+    this._queueT -= dt;
+    if (this._queueT > 0) return;
+    const cap = ctx.director?.maxAlive() ?? 99;
+    if (this.aliveCount() >= cap) { this._queueT = 0.5; return; }
+    const q = this._queue.shift();
+    const pool = SPAWN_POOLS[this._area] ?? SPAWN_POOLS.hall;
+    let idx = q.anchorIdx;
+    const [ax, az] = pool[idx].pos;
+    if (Math.hypot(ax - ctx.playerPos.x, az - ctx.playerPos.z) < DIRECTOR.spawnMinDist) {
+      idx = this._pickAnchors(1, q.pattern, ctx)[0] ?? idx;
+    }
+    this._spawnOne(q.cls, idx, ctx, q.pattern, q.i);
+    this._queueT = randRange(DIRECTOR.spawnStagger);
+    ctx.onReinforce?.();
+  }
+
+  /** The squad loses the player's trail (redeploy): everyone in contact
+   *  drops to a search around where THEY stand. */
+  loseTrack() {
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      e._abortShot(null);
+      e.alertT = 0;
+      e.lastSeen = 99;
+      e.seen = false;
+      const gp = e.group.position;
+      e.lastKnown.set(gp.x + rand(-3, 3), 0, gp.z + rand(-3, 3));
+      if (e.inCombat) e._startSearch();
+    }
+  }
+
   _spawnBoss(ctx) {
     if (!this._bossCls || this.boss) return;
     const pool = SPAWN_POOLS[this._area] ?? SPAWN_POOLS.hall;
     const idx = this._pickAnchors(1, 'standard', ctx)[0] ?? 0;
-    this.boss = this._spawnOne(this._bossCls, idx % pool.length, ctx, 'standard', 0);
+    this.boss = this._spawnOne(this._bossCls, idx % pool.length, ctx, 'standard', 0,
+      { hpScale: this._mission?.bossHpMul ?? 1 });
     this.boss.elite = true;
     this._bossPhase = 0;
+    this._barrageT = rand(9, 13);
     ctx?.onBoss?.(this.boss);
   }
 
@@ -1182,15 +1352,17 @@ export class EnemyManager {
   }
 
   /** Live hostiles + reinforcements still queued — what "clear the area" means. */
-  remaining() { return this.aliveCount() + this._wavePlan.reduce((a, n) => a + n, 0) + (this._bossCls && !this.boss ? 1 : 0); }
+  remaining() { return this.aliveCount() + this._queue.length + this._wavePlan.reduce((a, n) => a + n, 0) + (this._bossCls && !this.boss && !this.bossKilled ? 1 : 0); }
 
   /** Objective done: every hostile still standing pulls out (smoke + gone). */
   retreatAll(ctx) {
     this._wavePlan = [];
+    this._queue = [];
     this.trickle = null;
     this._bossCls = null;
     for (const e of this.enemies) {
       if (!e.alive) continue;
+      e._abortShot(ctx);
       const p = e.group.position;
       ctx?.particles.smokePuff(p.x, p.y + 1, p.z, 4, 0.5);
       e.state = ESTATE.DEAD;
@@ -1217,13 +1389,18 @@ export class EnemyManager {
     this._antiStuck(ctx);
     this._idleRecall(dt, ctx);
     this._reapCorpses();
-    this._bossTick(ctx);
+    this._bossTick(dt, ctx);
+    this._drainQueue(dt, ctx);
 
+    const cap = ctx.director?.maxAlive() ?? 99;
     if (this._wavePlan.length) {
       this._waveT -= dt;
-      // the next wave also comes early once the field is nearly clear
-      if (this._waveT <= 0 || (this.aliveCount() <= 1 && this._waveT > 3)) {
+      const live = this.aliveCount() + this._queue.length;
+      // the next wave also comes early once the field is nearly clear —
+      // and never while the last one is still walking in or the field is full
+      if (this._waveT <= 0 || (live <= 1 && this._waveT > 3)) {
         if (this._waveT > 0) { this._waveT = Math.min(this._waveT, 3); }
+        else if (this._queue.length || live > Math.max(1, cap - 2)) { this._waveT = 0; }
         else {
           const n = this._wavePlan.shift();
           const pattern = this._waveIdx === 0 ? 'standard' : PATTERNS[Math.floor(Math.random() * PATTERNS.length)];
@@ -1238,8 +1415,10 @@ export class EnemyManager {
       this._trickleT -= dt;
       if (this._trickleT <= 0) {
         this._trickleT = randRange(this.trickle.gap);
-        if (this.aliveCount() < this.trickle.max) {
-          const n = Math.min(randInt(this.trickle.batch), this.trickle.max - this.aliveCount());
+        const live = this.aliveCount() + this._queue.length;
+        const max = Math.min(this.trickle.max, cap);
+        if (live < max) {
+          const n = Math.min(randInt(this.trickle.batch), max - live);
           const pattern = PATTERNS[Math.floor(Math.random() * PATTERNS.length)];
           this._spawnBatch(n, ctx, pattern);
           ctx.onWave?.({ ...this.waveInfo(), trickle: true });
@@ -1292,23 +1471,47 @@ export class EnemyManager {
   _reapCorpses() {
     let changed = false;
     for (const e of this.enemies) {
-      if (e.gone && e.group.parent) { this.scene.remove(e.group); changed = true; }
+      if (e.gone && e.group.parent) { this.scene.remove(e.group); e.dispose(); changed = true; }
     }
     if (changed) this.enemies = this.enemies.filter((e) => !e.gone);
   }
 
-  _bossTick(ctx) {
+  _bossTick(dt, ctx) {
     const b = this.boss;
     if (!b) return;
     ctx.onBossHp?.(b.alive ? b.hp / b.maxHp : 0, b);
     if (!b.alive) { this.boss = null; this.bossKilled = true; return; }
     const f = b.hp / b.maxHp;
-    // phase calls: at 66 % and 33 % the commander radios for backup
+    // phase calls: at 66 % and 33 % the commander radios for backup (two
+    // escorts, walked in by the queue) and the player gets a supply drop;
+    // the last phase is an enrage — faster trigger, more barrages
     const phase = f < 0.33 ? 2 : (f < 0.66 ? 1 : 0);
     if (phase > this._bossPhase) {
       this._bossPhase = phase;
-      this._spawnBatch(2 + phase, ctx, 'pincer');
-      ctx.onWave?.({ ...this.waveInfo(), boss: true });
+      this._spawnBatch(2, ctx, 'pincer');
+      this._waveIdx--;                       // escorts are not a campaign wave
+      if (phase === 2) b.fireRateScale *= 1.3;
+      ctx.onBossPhase?.(phase, b);
+    }
+    // signature attack: a telegraphed three-grenade barrage that walks
+    // across the player's position — keep moving
+    this._barrageT -= dt;
+    if (this._barrageT <= 0 && ctx.throwGrenade) {
+      const pp = ctx.playerPos, bp = b.group.position;
+      const d = Math.hypot(pp.x - bp.x, pp.z - bp.z);
+      if (b.inCombat && d > 7 && d < 30 && !ctx.playerHidden) {
+        this._barrageT = phase === 2 ? rand(7, 10) : rand(11, 15);
+        _muzzle.set(bp.x, bp.y + 1.8 * b.bodyScale, bp.z);
+        const ax = (pp.x - bp.x) / d, az = (pp.z - bp.z) / d;
+        for (let i = -1; i <= 1; i++) {
+          _aim.set(pp.x - az * i * 3.2 + rand(-0.6, 0.6), pp.y ?? 0, pp.z + ax * i * 3.2 + rand(-0.6, 0.6));
+          ctx.throwGrenade(_muzzle, _aim, { fuse: 2.3 + (i + 1) * 0.25, owner: b, dmg: 70, radius: 4.6 });
+        }
+        b.recoil = 1.4;
+        ctx.onBossBarrage?.(b);
+      } else {
+        this._barrageT = 1.5;
+      }
     }
   }
 
@@ -1330,7 +1533,7 @@ export class EnemyManager {
       const ang = ((T * 0.7) + recalled * 2.1) % (Math.PI * 2);
       recalled++;
       const py = ctx.playerPos.y ?? 0;
-      const [sx, sz] = this._freeSpot(ctx.playerPos.x + Math.sin(ang) * 10, ctx.playerPos.z + Math.cos(ang) * 10, py);
+      const [sx, sz] = this._freeSpot(ctx.playerPos.x + Math.sin(ang) * DIRECTOR.recallDist, ctx.playerPos.z + Math.cos(ang) * DIRECTOR.recallDist, py);
       e.group.position.set(sx, py, sz);
       e.anchorY = py;
       e._engagedAt = T;

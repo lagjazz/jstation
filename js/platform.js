@@ -136,50 +136,8 @@ export class Platform {
     this.speakerAnchor.position.set(9, 4.3, 22);
     scene.add(this.speakerAnchor);
 
-    // ---------- night city skyline beyond the tracks ----------
-    this._city();
-  }
-
-  _city() {
-    const { scene } = this;
-    const geo = new THREE.BoxGeometry(1, 1, 1);
-    const mat = new THREE.MeshStandardMaterial({
-      map: TEX.buildingFacade,
-      emissive: 0xffffff,
-      emissiveMap: TEX.buildingFacade,
-      emissiveIntensity: 0.85,
-      roughness: 0.85,
-      color: 0x1a1e26,
-    });
-    const n = Math.max(10, Math.round(34 * (this.cityDetail ?? 1)));   // QUALITY_PRESETS.cityDetail
-    const city = new THREE.InstancedMesh(geo, mat, n);
-    const mtx = new THREE.Matrix4();
-    const scl = new THREE.Vector3();
-    const q = new THREE.Quaternion();
-    const pos = new THREE.Vector3();
-    for (let i = 0; i < n; i++) {
-      const w = rand(5, 15);
-      const h = rand(7, 42);
-      const d = rand(5, 13);
-      pos.set(rand(-95, 55), h / 2 - 1, rand(36, 95));
-      scl.set(w, h, d);
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rand(-0.4, 0.4));
-      mtx.compose(pos, q, scl);
-      city.setMatrixAt(i, mtx);
-    }
-    city.frustumCulled = true;
-    // grouped so game.js can hide the city backdrop for worlds where it
-    // breaks the fiction (lunar base, underwater ruins, the tomb, …)
-    this.cityGroup = new THREE.Group();
-    this.cityGroup.add(city);
-    // distant haze plane behind city
-    const haze = new THREE.Mesh(
-      new THREE.PlaneGeometry(340, 90),
-      new THREE.MeshBasicMaterial({ color: 0x0a1020, fog: true }),
-    );
-    haze.position.set(-20, 30, 120);
-    this.cityGroup.add(haze);
-    scene.add(this.cityGroup);
+    // (the night-city skyline is js/skyline.js — game.js assigns its group
+    // to this.cityGroup so the per-mission visibility gating keeps working)
   }
 
   setDoors(open) { this.doorTarget = open ? 1 : 0; }

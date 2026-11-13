@@ -156,13 +156,13 @@ const Extras = {
     if (!choices.length) return;
     const head = document.createElement('div');
     head.className = 'perk-head';
-    head.textContent = `LEVEL UP — CHOOSE A PERK (${pending} left) · [1] [2] [3]`;
+    head.textContent = `LEVEL UP 升级 — CHOOSE A PERK 选择天赋 (${pending} left 剩余) · [1] [2] [3]`;
     row.appendChild(head);
     choices.forEach((p, i) => {
       const c = document.createElement('div');
       c.className = 'perk';
       c.dataset.id = p.id;
-      c.innerHTML = `<div class="pk-key">${i + 1}</div><div class="pk-name">${p.name}</div><div class="pk-jp">${p.jp}</div><div class="pk-desc">${p.desc}</div>`;
+      c.innerHTML = `<div class="pk-key">${i + 1}</div><div class="pk-name">${p.name}</div><div class="pk-jp">${p.zh}</div><div class="pk-desc">${p.desc}</div>`;
       row.appendChild(c);
     });
   },
@@ -178,11 +178,24 @@ const Extras = {
   },
 
   /** Mission banner line 4: objective + atmosphere variant. */
+  /** Redeploy grace: frac 1 → 0 while the player is invulnerable. */
+  setShield(frac) {
+    const el = this._x('shield-tag');
+    if (!el) return;
+    const on = frac > 0;
+    if (on !== this._shieldOn) {
+      this._shieldOn = on;
+      el.classList.toggle('hidden', !on);
+      document.body.classList.toggle('shielded', on);
+    }
+    if (on) el.querySelector('i').style.transform = `scaleX(${Math.min(1, frac).toFixed(3)})`;
+  },
+
   setBannerExtra(text) { this._x('mb-4').textContent = text; },
 
   levelUp(level) {
     const el = this._x('lvl-toast');
-    el.textContent = `▲ LEVEL ${level} · 昇級 — PERK READY`;
+    el.textContent = `▲ LEVEL ${level} 升级 — PERK READY 天赋待选`;
     el.classList.remove('show');
     void el.offsetWidth;
     el.classList.add('show');

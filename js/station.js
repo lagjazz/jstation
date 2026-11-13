@@ -54,17 +54,7 @@ export class Station {
     addBox(scene, { w: 0.3, h: 0.25, d: 8, mat: MAT.metalDark, x: 12, y: 3.75, z: 10, cast: false });
     world.addBox(new THREE.Vector3(11.8, 0, -10), new THREE.Vector3(12.2, 3.9, 2));   // collider w (opening z2..6)
     world.addBox(new THREE.Vector3(11.8, 0, 6), new THREE.Vector3(12.2, 3.9, 14));    // collider e
-    // garden east + south walls
-    addBox(scene, { w: 0.4, h: 6, d: 24, mat: wall, x: 26.2, y: 3, z: 2, collide: world, raycast: rc });
-    addBox(scene, { w: 14.5, h: 6, d: 0.4, mat: wall, x: 19, y: 3, z: -10.2, collide: world, raycast: rc });
-    // garden gravel
-    const gravel = new THREE.Mesh(new THREE.PlaneGeometry(14, 24), MAT.gravel);
-    gravel.rotation.x = -Math.PI / 2;
-    gravel.position.set(19, 0.015, 2);
-    gravel.receiveShadow = true;
-    gravel.userData.tag = 'concrete';
-    scene.add(gravel);
-    rc.push(gravel);
+    // (the garden itself — walls, ground, pavilion, trees — is js/garden.js)
 
     // ---------- structural ceiling beams ----------
     const beamGeo = cachedBeams();
@@ -124,7 +114,8 @@ export class Station {
     scene.add(ledMesh);
 
     // ---------- lighting ----------
-    scene.add(new THREE.HemisphereLight(0x223052, 0x0a0c11, 0.55));
+    this.hemi = new THREE.HemisphereLight(0x223052, 0x0a0c11, 0.55);
+    scene.add(this.hemi);
     const moon = new THREE.DirectionalLight(0x93a7ff, 0.8);
     moon.position.set(40, 60, 70);
     scene.add(moon);
@@ -193,7 +184,6 @@ export class Station {
     makeBench(scene, world, rc, -14, 12, 0);
     makeBench(scene, world, rc, -22, -14.4, 0);
     makeBench(scene, world, rc, 4, 12, 0);
-    makeBench(scene, world, rc, 16, 12.8, Math.PI / 2);   // garden-side bench
 
     // ---------- trash bins ----------
     const binGeo = new THREE.CylinderGeometry(0.26, 0.3, 0.85, 10);
@@ -242,7 +232,6 @@ export class Station {
 
     // station name plaques (west wall + garden wall)
     makeSign(scene, { tex: TEX.stationName, w: 2.4, h: 0.6, x: -39.9, y: 3.1, z: 9, rotY: Math.PI / 2, intensity: 0.75 });
-    makeSign(scene, { tex: TEX.stationName, w: 2.4, h: 0.6, x: 19, y: 3.4, z: -9.95, rotY: 0, intensity: 0.8 });
 
     // exit signs above south wall
     for (const ex of [-26, 4]) {
@@ -261,26 +250,11 @@ export class Station {
 
     // ---------- ad billboards ----------
     const posters = [
-      [-24, -15.85, 2.7, 0], [-16, -15.85, 2.7, 0], [17, -9.98, 2.7, 0], [22, -9.98, 2.7, 0],
+      [-24, -15.85, 2.7, 0], [-16, -15.85, 2.7, 0],
     ];
     posters.forEach(([px, pz, py, rY], i) => this._poster(px, py, pz, rY, i));
     this._posterWallX(-39.85, -9, 2.7, 4);
     this._posterWallX(-39.85, 12, 2.7, 5);
-
-    // ---------- garden lanterns (warm glow for bloom) ----------
-    for (const [lx, lz] of [[15.5, 11.5], [23, -6]]) {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 3.2, 8), MAT.metalDark);
-      post.position.set(lx, 1.6, lz);
-      post.castShadow = true;
-      scene.add(post);
-      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.17, 10, 8), MAT.led(0xffc37a, 2.6));
-      bulb.position.set(lx, 3.3, lz);
-      scene.add(bulb);
-      const lp = new THREE.PointLight(0xffb36b, 26, 12, 2);
-      lp.position.set(lx, 3.3, lz);
-      scene.add(lp);
-      this.qualityLights.push(lp);
-    }
   }
 
   _poster(x, y, z, rotY, i) {

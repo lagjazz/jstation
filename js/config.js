@@ -60,7 +60,35 @@ export const ASSETS = {
 // tweak player physics + special mechanics per world.
 export const WAVES = {
   batchSize: [2, 3],   // used when a mission has no explicit `waves`
-  gap: [11, 20],       // seconds between reinforcement batches
+  gap: [14, 22],       // seconds between reinforcement batches
+};
+
+// Combat director (js/director.js) — the pacing layer that keeps a fight
+// readable and fair instead of a dog-pile:
+//   • attack tokens: only a few hostiles may shoot at the same moment; the
+//     rest reposition, flank or hold cover until a slot frees up
+//   • staggered arrivals: a wave walks in one soldier at a time, far from
+//     the player, and never pushes the live head-count past `maxAlive`
+//   • redeploy grace: after going down you come back far from the enemy,
+//     shielded and unseen for a few seconds, and the squad loses your trail
+//   • mercy: every death in a mission softens incoming damage a little
+//   • supply: caches at the entry / mid-field, pity drops when you run dry
+export const DIRECTOR = {
+  tokens: 2, tokensPerMission: 0.12, tokensMax: 4,
+  tokenCooldown: [0.5, 1.1],    // pause a shooter takes after giving its slot back
+  maxAlive: 4, maxAlivePerMission: 0.28, maxAliveCap: 8,
+  spawnStagger: [0.9, 1.6],     // seconds between two arrivals of one wave
+  spawnMinDist: 18,             // reinforcements never appear closer than this
+  recallDist: 15,
+  openingCalm: 2.5,             // seconds after deployment before anyone can spot you
+  respawnGrace: 4.5,            // invulnerable seconds after a redeploy
+  respawnHidden: 3.0,           // …and unseen for this long
+  respawnMinDist: 22,
+  mercyPerDeath: 0.1, mercyFloor: 0.6,
+  pityAmmoBelow: 1.0,           // reserve (in magazines) under which ammo drops are near-certain
+  pityHpBelow: 0.45,            // hp fraction under which medkit drops are likely
+  pityAmmoChance: 0.95, pityMedChance: 0.8,
+  stagger: { frac: 0.3, time: 0.45 },   // one hit ≥ frac of max hp (or a headshot) staggers
 };
 
 // Objective pools: a mission draws ONE objective type from its
@@ -69,9 +97,9 @@ export const WAVES = {
 // `specials` mixes shield / medic / drone units into later waves, and
 // `boss` names the class that leads the last wave (or the manhunt).
 export const OBJECTIVES = {
-  survive:     { duration: 70, perMission: 2, gap: [5, 9], maxAlive: 6, batch: [1, 3] },
-  defend:      { duration: 65, perMission: 2, gap: [6, 10], maxAlive: 6, batch: [1, 3], hackRate: 4.5 },
-  capture:     { time: 32, radius: 4.5, gap: [7, 12], maxAlive: 5, batch: [1, 2] },
+  survive:     { duration: 70, perMission: 1.5, gap: [7, 11], maxAlive: 5, batch: [1, 2] },
+  defend:      { duration: 60, perMission: 1.5, gap: [8, 12], maxAlive: 5, batch: [1, 2], hackRate: 3.6 },
+  capture:     { time: 28, radius: 5.5, gap: [9, 14], maxAlive: 4, batch: [1, 2] },
   intel:       {},
   assassinate: {},
   eliminate:   {},
@@ -97,53 +125,57 @@ export const MISSIONS = [
   {
     name1: 'MISSION 01',
     name2: 'SECURE THE CONCOURSE',
-    desc:  'Eliminate all hostile targets in the main hall.',
+    desc: 'Eliminate all hostile targets in the main hall. 歼灭主厅全部敌人。',
     jp:    '改札制圧',
+    zh:    '占领检票区',
     enemyCount: 5,
     waves: [2, 3],
     roster: ['rifle'],
     area: 'hall',
     objectives: ['eliminate', 'defend', 'capture'],
     specials: ['shield'],
-    spawn: { x: -6, z: -8, yaw: 0 },
-    atmo: {},
+    spawn: { x: -36.5, z: -12.5, yaw: -2.1 },
+    atmo: { hemi: 1.15, hemiSky: 0x7f93bd, hemiGround: 0x2b2f38 },
   },
   {
     name1: 'MISSION 02',
     name2: 'PLATFORM LOCKDOWN',
-    desc:  'Hostiles hold the boarding platform. Clear the tracks.',
+    desc: 'Hostiles hold the boarding platform. Clear the tracks. 敌人占领登车月台，清空轨道。',
     jp:    'ホーム制圧',
+    zh:    '占领站台',
     enemyCount: 6,
     waves: [3, 3],
     roster: ['rifle', 'rifle', 'rusher'],
     area: 'platform',
-    objectives: ['survive', 'capture', 'eliminate'],
+    objectives: ['capture', 'survive', 'eliminate'],
     specials: ['shield', 'medic'],
-    spawn: { x: -20, z: 10, yaw: Math.PI },
-    atmo: { fogNear: 40, fogFar: 175, moon: 0.55 },
+    spawn: { x: -36, z: 6, yaw: -2.2 },
+    atmo: { fogNear: 40, fogFar: 175, moon: 0.9, hemi: 1.1, hemiSky: 0x7f93bd, hemiGround: 0x2b2f38 },
     trainSoon: true,
   },
   {
     name1: 'MISSION 03',
     name2: 'SAKURA GARDEN SIEGE',
-    desc:  'Sweep east of the hall — elite hostiles among the trees.',
+    desc: 'Sweep the garden east of the hall — their commander is among the trees. 肃清大厅东侧庭院——敌方指挥官就在林间。',
     jp:    '桜の庭園 掃討',
+    zh:    '樱花庭院扫荡',
     enemyCount: 7,
-    waves: [3, 4],
-    roster: ['rifle', 'rusher'],
+    waves: [3, 2, 2],
+    roster: ['rifle', 'rifle', 'rusher'],
     area: 'garden',
-    objectives: ['eliminate', 'intel', 'assassinate'],
+    objectives: ['assassinate', 'intel', 'eliminate'],
     specials: ['medic', 'drone'],
     boss: 'commander',
-    spawn: { x: 7, z: 4, yaw: -Math.PI / 2 },
-    atmo: { fogNear: 34, fogFar: 160, moon: 0.85 },
-    elite: true,
+    bossHpMul: 0.7,              // first commander of the campaign: a lesson, not a wall
+    spawn: { x: 8, z: 4, yaw: -Math.PI / 2 },
+    atmo: { fogNear: 45, fogFar: 190, moon: 2.6, hemi: 1.5, hemiSky: 0x4a5c9a, hemiGround: 0x2a2420 },
   },
   {
     name1: 'MISSION 04',
     name2: 'NEON ALLEY SWEEP',
-    desc:  'Rain-slicked neon corridors of the cyber block. Shoot the signs down.',
+    desc: 'Rain-slicked neon corridors of the cyber block. Shoot the signs down. 雨夜霓虹走廊，把招牌打下来。',
     jp:    '電脳九龍 掃討',
+    zh:    '电脑九龙扫荡',
     enemyCount: 8,
     waves: [3, 3, 2],
     roster: ['rifle', 'rusher', 'marksman', 'stalker'],
@@ -156,8 +188,9 @@ export const MISSIONS = [
   {
     name1: 'MISSION 05',
     name2: 'LUNAR OUTPOST',
-    desc:  'Dead moon dome, low gravity. Jump high — the airlock switch is shootable.',
+    desc: 'Dead moon dome, low gravity. Jump high — the airlock switch is shootable. 死寂月面穹顶，低重力跳高——气闸开关可射击。',
     jp:    '月面基地 潜入',
+    zh:    '月面基地潜入',
     enemyCount: 7,
     waves: [2, 3, 2],
     roster: ['rifle', 'stalker', 'breacher'],
@@ -171,8 +204,9 @@ export const MISSIONS = [
   {
     name1: 'MISSION 06',
     name2: "GOLDEN TOMB",
-    desc:  'Pillar maze of the pharaoh. Breachers guard the gold.',
+    desc: 'Pillar maze of the pharaoh. Breachers guard the gold. 法老柱阵迷宫，破障兵守着黄金。',
     jp:    '黄金の墓 探索',
+    zh:    '黄金陵墓探索',
     enemyCount: 8,
     waves: [3, 3, 2],
     roster: ['rifle', 'breacher', 'heavy'],
@@ -180,14 +214,15 @@ export const MISSIONS = [
     objectives: ['intel', 'capture', 'eliminate'],
     specials: ['shield', 'medic'],
     spawn: { x: -20, z: -70, yaw: -2.0 },
-    atmo: { fogNear: 16, fogFar: 95, moon: 0.3, bg: 'dark' },
+    atmo: { fogNear: 16, fogFar: 95, moon: 0.3, bg: 'dark', bloom: 0.6 },
     mods: { traps: true },
   },
   {
     name1: 'MISSION 07',
     name2: 'SKYPORT RAID',
-    desc:  'Gantry deck above the clouds — the rails hold, so use the steam vents.',
+    desc: 'Gantry deck above the clouds — the rails hold, so use the steam vents. 云端 gantry 甲板——栏杆可靠，善用蒸汽喷口。',
     jp:    '天空港 急襲',
+    zh:    '天空港突袭',
     enemyCount: 8,
     waves: [2, 3, 3],
     roster: ['rifle', 'marksman', 'stalker'],
@@ -200,8 +235,9 @@ export const MISSIONS = [
   {
     name1: 'MISSION 08',
     name2: 'QUANTUM LAB INCURSION',
-    desc:  'White hall, one core. Its EMP pulses will blind your optics.',
+    desc: 'White hall, one core. Its EMP pulses will blind your optics. 纯白大厅一座核心，EMP 脉冲会干扰光学。',
     jp:    '量子実験室 制圧',
+    zh:    '量子实验室肃清',
     enemyCount: 9,
     waves: [3, 3, 3],
     roster: ['rifle', 'heavy', 'bombardier'],
@@ -210,15 +246,16 @@ export const MISSIONS = [
     specials: ['drone', 'shield'],
     boss: 'commander',
     spawn: { x: 87, z: 38.5, yaw: Math.PI },
-    atmo: { fogNear: 50, fogFar: 230, moon: 0.78, bg: 'dark' },
+    atmo: { fogNear: 50, fogFar: 230, moon: 0.78, bg: 'dark', bloom: 0.5 },
     mods: { emp: true },
     elite: true,
   },
   {
     name1: 'MISSION 09',
     name2: 'SUNKEN CONTINENT',
-    desc:  'Atlantis endgame — heavy water, glowing ruins, everything they have.',
+    desc: 'Atlantis endgame — heavy water, glowing ruins, everything they have. 亚特兰蒂斯终局——深水、遗迹、倾巢而出。',
     jp:    '沈没大陸 最終決戦',
+    zh:    '沉没大陆决战',
     enemyCount: 11,
     waves: [3, 3, 2, 3],
     roster: ['rifle', 'rusher', 'heavy', 'bombardier', 'marksman'],
@@ -235,8 +272,9 @@ export const MISSIONS = [
   {
     name1: 'MISSION 10',
     name2: 'POLAR ICEBREAKER',
-    desc:  'Aurora over the frozen sea. The deck is slick — and the icicles fall.',
+    desc: 'Aurora over the frozen sea. The deck is slick — and the icicles fall. 极光下的冰海，甲板湿滑——注意落冰。',
     jp:    '極夜破冰船 突入',
+    zh:    '极夜破冰船突入',
     enemyCount: 9,
     waves: [3, 3, 3],
     roster: ['rifle', 'marksman', 'flamer'],
@@ -253,8 +291,9 @@ export const MISSIONS = [
   {
     name1: 'MISSION 11',
     name2: 'ORBITAL NEXUS',
-    desc:  'Ring platform in the stratosphere. Watch the deck — a cargo train runs it.',
+    desc: 'Ring platform in the stratosphere. Watch the deck — a cargo train runs it. 平流层环台——注意甲板上有货运列车通过。',
     jp:    '軌道ターミナル 制圧',
+    zh:    '轨道总站肃清',
     enemyCount: 9,
     waves: [3, 3, 3],
     roster: ['rifle', 'rusher', 'marksman', 'phantom'],
@@ -267,8 +306,9 @@ export const MISSIONS = [
   {
     name1: 'MISSION 12',
     name2: 'CANOPY OF YGGDRASIL',
-    desc:  'Fight on the treetops. The big leaves are springboards — use them.',
+    desc: 'Fight on the treetops. The big leaves are springboards — use them. 树冠作战——大叶片是弹簧板，用起来。',
     jp:    '世界樹の冠 掃討',
+    zh:    '世界树之冠扫荡',
     enemyCount: 10,
     waves: [3, 3, 4],
     roster: ['rifle', 'stalker', 'phantom', 'flamer'],
@@ -282,8 +322,9 @@ export const MISSIONS = [
   {
     name1: 'MISSION 13',
     name2: 'THE RUSTING CANYON',
-    desc:  'Wreck of a starship in red rock. Sandstorms roll in without warning.',
+    desc: 'Wreck of a starship in red rock. Sandstorms roll in without warning. 红岩中的星舰残骸，沙暴说来就来。',
     jp:    '錆の峡谷 探索',
+    zh:    '锈蚀峡谷探索',
     enemyCount: 10,
     waves: [3, 3, 4],
     roster: ['rifle', 'marksman', 'breacher', 'juggernaut'],
@@ -300,8 +341,9 @@ export const MISSIONS = [
   {
     name1: 'MISSION 14',
     name2: 'ZERO-G AQUARIUM',
-    desc:  'Gravity failed here. Jet over the floating water orbs — they slow you.',
+    desc: 'Gravity failed here. Jet over the floating water orbs — they slow you. 重力失效之地，飞越浮水球——它们会拖慢你。',
     jp:    '無重力水槽 突入',
+    zh:    '零重力水族馆突入',
     enemyCount: 11,
     waves: [3, 4, 4],
     roster: ['rifle', 'phantom', 'flamer', 'stalker'],
@@ -315,8 +357,9 @@ export const MISSIONS = [
   {
     name1: 'MISSION 15',
     name2: 'CLOCKWORK PURGATORY',
-    desc:  'Endgame in the turning brass world. Everything they have, on every gear.',
+    desc: 'Endgame in the turning brass world. Everything they have, on every gear. 终局：转动的黄铜世界，每个齿轮上都是敌人。',
     jp:    '歯車の煉獄 最終決戦',
+    zh:    '齿轮炼狱决战',
     enemyCount: 12,
     waves: [3, 3, 3, 3],
     roster: ['rifle', 'heavy', 'marksman', 'bombardier', 'juggernaut', 'phantom'],
@@ -347,7 +390,7 @@ export const PLAYER = {
   fov: 72,
   fovSprint: 79,
   maxHp: 100,
-  overrunHp: 60,     // hp restored on death-respawn (no passive regen — medkits only)
+  overrunHp: 80,     // hp restored on death-respawn (no passive regen — medkits only)
   hearingRadius: 24, // enemies hear player shots within this radius
 };
 
@@ -375,15 +418,15 @@ export const RECOIL = {
 
 export const WEAPONS = {
   rifle: {
-    key: 'rifle', label: 'AR-15 ASSAULT', sound: 'shotRifle',
+    key: 'rifle', label: 'AR-15 ASSAULT', zh: '突击步枪', sound: 'shotRifle',
     auto: true, rpm: 640, damage: 26, pellets: 1,
-    mag: 30, reserve: 120, reserveMax: 180,
+    mag: 30, reserve: 150, reserveMax: 240,
     spreadBase: 0.0035, spreadKick: 0.0042, spreadMax: 0.04,
     sprayRamp: 16, climbMin: 0.0015, climbMax: 0.013, climbKnee: 5,
     kick: 1.0, reloadTime: 2.1, range: 140, adsZoom: 1.45,
   },
   pistol: {
-    key: 'pistol', label: 'M9 SIDEARM', sound: 'shotPistol',
+    key: 'pistol', label: 'M9 SIDEARM', zh: '手枪', sound: 'shotPistol',
     auto: false, rpm: 460, damage: 30, pellets: 1,
     mag: 12, reserve: 72, reserveMax: 120,
     spreadBase: 0.0028, spreadKick: 0.003, spreadMax: 0.024,
@@ -391,16 +434,16 @@ export const WEAPONS = {
     kick: 0.8, reloadTime: 1.5, range: 90, adsZoom: 1.2,
   },
   shotgun: {
-    key: 'shotgun', label: 'M870 BREACHER', sound: 'shotShotgun',
-    auto: false, rpm: 78, damage: 11, pellets: 8,
-    mag: 6, reserve: 36, reserveMax: 60,
+    key: 'shotgun', label: 'M870 BREACHER', zh: '霰弹枪', sound: 'shotShotgun',
+    auto: false, rpm: 78, damage: 13, pellets: 8,
+    mag: 6, reserve: 36, reserveMax: 66,
     spreadBase: 0.02, spreadKick: 0.01, spreadMax: 0.06,
     sprayRamp: 4, climbMin: 0.005, climbMax: 0.023,
     kick: 2.6, reloadTime: 2.7, range: 45, adsZoom: 1.15,
   },
 
   smg: {
-    key: 'smg', label: 'MP7 PDW', sound: 'shotSmg',
+    key: 'smg', label: 'MP7 PDW', zh: '冲锋枪', sound: 'shotSmg',
     auto: true, rpm: 900, damage: 17, pellets: 1,
     mag: 40, reserve: 160, reserveMax: 240,
     spreadBase: 0.005, spreadKick: 0.0032, spreadMax: 0.035,
@@ -408,7 +451,7 @@ export const WEAPONS = {
     kick: 0.6, reloadTime: 1.9, range: 80, adsZoom: 1.25,
   },
   dmr: {
-    key: 'dmr', label: 'M14 EBR · DMR', sound: 'shotDmr',
+    key: 'dmr', label: 'M14 EBR · DMR', zh: '精确射手步枪', sound: 'shotDmr',
     auto: false, rpm: 220, damage: 64, pellets: 1,
     mag: 10, reserve: 40, reserveMax: 70,
     spreadBase: 0.0015, spreadKick: 0.006, spreadMax: 0.03,
@@ -416,7 +459,7 @@ export const WEAPONS = {
     kick: 1.8, reloadTime: 2.5, range: 240, adsZoom: 3.2, scope: true, pierce: 1,
   },
   launcher: {
-    key: 'launcher', label: 'M32 MGL LAUNCHER', sound: 'shotLauncher',
+    key: 'launcher', label: 'M32 MGL LAUNCHER', zh: '榴弹发射器', sound: 'shotLauncher',
     auto: false, rpm: 90, damage: 150, pellets: 0,
     mag: 6, reserve: 12, reserveMax: 18,
     spreadBase: 0.004, spreadKick: 0.004, spreadMax: 0.02,
@@ -437,7 +480,7 @@ export const ADS = { spreadMul: 0.45, speedMul: 0.65, sensMul: 0.6, fovDefaultZo
 export const GRENADE = { start: 2, dmg: 140, radius: 6.5, fuse: 2.0, throwSpeed: 15, cooldown: 0.8 };
 
 export const ENEMY = {
-  hp: 130,               // base hit points for the standard 'rifle' hostile
+  hp: 100,               // base hit points for the standard 'rifle' hostile
   patrolSpeed: 1.6,
   chaseSpeed: 3.05,
   viewDistance: 30,
@@ -447,22 +490,22 @@ export const ENEMY = {
   losCheckInterval: 0.2,
   headshotMultiplier: 2.0,
   limbMultiplier: 0.72,  // thigh / shin / upper-arm hitboxes
-  damageMin: 9,
-  damageMax: 15,
+  damageMin: 7,
+  damageMax: 12,
   fireGap: [1.2, 2.0],   // seconds between bursts while in ATTACK state
   burst: [1, 3],         // rounds per trigger pull (0.11 s apart)
   mag: 24,               // rounds before a reload (the player's window)
   reloadTime: [1.7, 2.5],
-  hitChance: 0.63,       // base accuracy (falls off with distance)
-  reaction: [0.35, 0.7], // first-sight delay before the first shot
+  hitChance: 0.5,        // base accuracy (falls off with distance)
+  reaction: [0.6, 1.0],  // first-sight delay before the first shot
   alertRadius: 20,       // a spotter calls the player's position to squadmates
   searchTime: [5, 8],    // seconds spent sweeping the last known position
   coverHp: 0.5,          // below this hp fraction a hostile breaks for cover
   grenadeGap: [9, 15],   // per-thrower cooldown
   corpseTime: 7,         // seconds a body stays before it sinks away
   // Elite flag (MISSIONS[].elite): red band + strobe, buffed stats.
-  eliteHpMultiplier: 1.5,
-  eliteSpeedScale: 1.15,
+  eliteHpMultiplier: 1.35,
+  eliteSpeedScale: 1.1,
   // Enemy classes — per-class overrides of the base values above.
   // `hpMul` scales base hp, `chaseMul`/`patrolMul` scale speed,
   // `fireGap` is the burst interval range, `hitBias` adds to accuracy,
@@ -484,8 +527,9 @@ export const ENEMY = {
                   damageMin: 11, damageMax: 16, grenades: true, noCover: true },
     marksman:   { hpMul: 0.85, chaseMul: 0.9, viewDistance: 52,
                   attackRange: 26, loseRange: 48, fireGap: [2.2, 3.2], burst: [1, 1],
-                  hitBias: 0.2, damageMin: 15, damageMax: 23, keepDist: 11,
-                  aimSpeed: 5, mag: 10, sound: 'enemySniper' },
+                  hitBias: 0.3, damageMin: 20, damageMax: 28, keepDist: 11,
+                  aimSpeed: 5, mag: 10, sound: 'enemySniper',
+                  telegraph: 1.15 },   // visible laser: break line of sight or sidestep the lock
     stalker:    { hpMul: 0.8, chaseMul: 1.7, patrolMul: 1.4, viewDistance: 22,
                   attackRange: 9, fireGap: [0.5, 1.0], hitBias: 0.16, burst: [2, 4],
                   damageMin: 6, damageMax: 10, quiet: true, scale: 0.96, flank: true, mag: 30 },
@@ -521,9 +565,9 @@ export const ENEMY = {
                   attackRange: 16, fireGap: [0.9, 1.6], burst: [3, 5], hitBias: -0.02,
                   damageMin: 4, damageMax: 7, flying: true, hover: 2.7, quiet: true,
                   flank: true, noCover: true, mag: 40, sound: 'enemyZap' },
-    commander:  { hpMul: 8.5, chaseMul: 0.82, patrolMul: 0.8, viewDistance: 40,
-                  attackRange: 22, loseRange: 60, fireGap: [0.8, 1.3], burst: [3, 5],
-                  hitBias: 0.06, damageMin: 9, damageMax: 14, keepDist: 7, scale: 1.3,
+    commander:  { hpMul: 9, chaseMul: 0.82, patrolMul: 0.8, viewDistance: 40,
+                  attackRange: 22, loseRange: 60, fireGap: [1.0, 1.6], burst: [3, 5],
+                  hitBias: 0.04, damageMin: 8, damageMax: 12, keepDist: 7, scale: 1.3,
                   aimSpeed: 6, grenades: true, boss: true, noCover: true, mag: 45,
                   sound: 'enemyHeavy' },
   },
@@ -542,15 +586,15 @@ export const ENEMY = {
 //   overdrive 10 s of +50 % damage
 //   haste     10 s of +30 % move speed and 40 % faster reloads
 export const DROPS = {
-  ammoChance: 0.5,    ammoRounds: 24,
-  medkitChance: 0.3,  medkitHp: 26,
+  ammoChance: 0.55,   ammoMags: 1,      // +1 magazine for every owned weapon
+  medkitChance: 0.3,  medkitHp: 32,
   armorChance: 0.14,  armorPts: 30,
   grenadeChance: 0.12,
   weaponChance: 0.035,
   overdriveChance: 0.04, hasteChance: 0.045, buffTime: 10,
   bonus: { heavy: 0.15, bombardier: 0.2, juggernaut: 0.35, flamer: 0.15, shield: 0.12,
            medic: 0.25, commander: 1 },
-  lifetime: 18,
+  lifetime: 28,
 };
 
 export const ARMOR = { absorb: 0.6 };

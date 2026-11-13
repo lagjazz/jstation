@@ -32,13 +32,13 @@ const PAL = {
   drone:      { suit: [0x2a2f38, 0x30343c, 0x262c36], vest: 0x15181d, helm: [0x3a404a, 0x3a404a, 0x3a404a], glow: 0xff3050 },
 };
 
-const SKIN = 0x2a2420;        // balaclava
-const STRAP = 0x11151a;
-const GLOVE = 0x101318;
-const BOOT = 0x15171b;
-const SOLE = 0x0a0b0d;
-const GUN = 0x15181d;
-const GUNP = 0x1d2026;        // polymer furniture
+const SKIN = 0x4a4038;        // balaclava
+const STRAP = 0x2a3038;
+const GLOVE = 0x23272e;
+const BOOT = 0x2b2e34;
+const SOLE = 0x15171a;
+const GUN = 0x2c3138;
+const GUNP = 0x3a3f47;        // polymer furniture
 const BRASS = 0x8a6a2a;
 
 const CLOTH = { r: 0.88, m: 0.02 };
@@ -48,6 +48,22 @@ const METAL = { r: 0.38, m: 0.75 };
 const POLY = { r: 0.62, m: 0.1 };
 
 const _cache = new Map();
+
+/** The authored palette is near-black (it was tuned against a much
+ *  brighter scene) — in the night maps every hostile collapsed into a
+ *  flat silhouette. Lift it: scale the value, add a floor, keep the hue. */
+function lift(hex, k = 2.05, floor = 0.035) {
+  const r = ((hex >> 16) & 255) / 255, g = ((hex >> 8) & 255) / 255, b = (hex & 255) / 255;
+  const f = (v) => Math.min(255, Math.round((v * k + floor) * 255));
+  return (f(r) << 16) | (f(g) << 8) | f(b);
+}
+
+/** Saturated, non-emissive class colour for cloth markings (arm bands,
+ *  shoulder patches) — readable under any light, unlike the tiny LEDs. */
+function mark(hex) {
+  const r = ((hex >> 16) & 255) * 0.62, g = ((hex >> 8) & 255) * 0.62, b = (hex & 255) * 0.62;
+  return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b);
+}
 
 /** Baked segments for one hostile look. See Enemy._build for the rig. */
 export function enemyModel(cls, elite, seed) {
@@ -60,9 +76,9 @@ export function enemyModel(cls, elite, seed) {
 // ------------------------------------------------------------------
 function buildSoldier(cls, elite, seed) {
   const P = PAL[cls] ?? PAL.rifle;
-  const suit = P.suit[seed % 3];
-  const helm = elite ? 0x4a1c1f : P.helm[seed % 3];
-  const vest = P.vest;
+  const suit = lift(P.suit[seed % 3]);
+  const helm = elite ? 0x8a2a2c : lift(P.helm[seed % 3]);
+  const vest = lift(P.vest, 2.3);
   const glow = elite ? 0xff2424 : P.glow;
   const heavy = cls === 'heavy' || cls === 'juggernaut' || cls === 'commander';
   const light = cls === 'rusher' || cls === 'stalker' || cls === 'phantom';
@@ -141,6 +157,11 @@ function buildSoldier(cls, elite, seed) {
   if (cls === 'medic' || elite || cls === 'rusher' || cls === 'stalker') {
     body.add(G.cyl(0.075, 0.075, 0.05, 12), elite ? 0xff2020 : glow, -0.25, 1.33, 0, { glow: true }); // armband
   }
+  // class identification: a lit chest bar + back bar (reads at range, front
+  // and rear) and cloth shoulder patches in the class colour
+  body.add(G.box(0.16, 0.028, 0.012), glow, 0, 1.41, 0.168, { glow: true });
+  body.add(G.box(0.2, 0.03, 0.012), glow, 0, 1.44, light ? -0.165 : -0.29, { glow: true });
+  body.pair(G.box(0.02, 0.1, 0.1), mark(glow), carrierW / 2 + 0.03, 1.4, 0, CLOTH);
   // ---- head ----
   body.add(G.cyl(0.055, 0.066, 0.1, 10), SKIN, 0, 1.55, 0, CLOTH);
   body.add(G.sph(0.098, 14, 11), SKIN, 0, 1.635, 0.005, { ...CLOTH, s: [0.95, 1.05, 1] });
@@ -163,6 +184,7 @@ function buildSoldier(cls, elite, seed) {
   const upper = new PartList();
   upper.add(G.cap(0.06, 0.14, 4, 10), suit, 0, -0.13, 0, CLOTH);
   upper.add(G.sph(cls === 'heavy' ? 0.11 : 0.085, 10, 8), vest, 0, -0.02, 0, { ...NYLON, s: [1.1, 0.8, 1.1] });
+  upper.add(G.cyl(0.066, 0.064, 0.05, 10), mark(glow), 0, -0.12, 0, CLOTH);     // class arm band
   const fore = new PartList();
   fore.add(G.cap(0.052, 0.13, 4, 10), suit, 0, -0.12, 0, CLOTH);
   fore.add(G.box(0.1, 0.08, 0.1), vest, 0, 0, 0, HARD);                        // elbow pad

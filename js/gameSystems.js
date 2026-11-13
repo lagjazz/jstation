@@ -14,7 +14,9 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { ADS, ARMOR, DROPS, ENEMY, GRENADE, MISSIONS, PLAYER, PROGRESSION, WEAPON_ORDER } from './config.js';
+import { ADS, ARMOR, DIRECTOR, DROPS, ENEMY, GRENADE, MISSIONS, PLAYER, PROGRESSION, WEAPON_ORDER } from './config.js';
+import { Director, pickSafest } from './director.js';
+import { blockedAt } from './collision.js';
 import { SPAWN_POOLS } from './enemy.js';
 import { Explosives } from './explosives.js';
 import { PropManager } from './props.js';
@@ -36,6 +38,7 @@ export const GameSystems = {
     this.props = new PropManager(this.scene, this.world, this.particles, this.audio);
     this.objectives = new Objectives(this.scene, this.world, this.particles, this.audio);
     this.weather = new Weather(this.scene);
+    this.director = new Director();
     this.armor = 0;
     this.grenades = GRENADE.start;
     this._grenCd = 0;
@@ -91,8 +94,14 @@ export const GameSystems = {
   // ---------------------------------------------------------------- arming
   /** Called from _setupMission: objective, enemies, props, variant. */
   _armSystems(m) {
+    // first attempt at a mission plays its authored objective (the first
+    // of the pool, so the campaign has a designed rhythm); a retry or a
+    // replay rolls the pool so the same map plays differently
     const types = m.objectives ?? ['eliminate'];
-    const type = types[Math.floor(Math.random() * types.length)];
+    this._attempts = this._attempts ?? {};
+    const tries = this._attempts[this.missionIdx] = (this._attempts[this.missionIdx] ?? 0) + 1;
+    const type = tries === 1 ? types[0] : types[Math.floor(Math.random() * types.length)];
+    this.director.reset(this.missionIdx);
     const anchors = SPAWN_POOLS[m.area] ?? SPAWN_POOLS.hall;
     this.explosives.clear();
     this.props.clear();
@@ -118,7 +127,7 @@ export const GameSystems = {
     this._applyVariant();
     const vi = VARIANT_INFO[this._variant];
     const oi = this.objectives.hud(this.enemyMgr);
-    this.hud.setBannerExtra(`OBJECTIVE: ${oi.title}${this._variant !== 'clear' ? `  ·  CONDITIONS: ${vi.en} ${vi.jp}` : ''}`);
+    this.hud.setBannerExtra(`OBJECTIVE: ${oi.title}${this._variant !== 'clear' ? `  ·  CONDITIONS: ${vi.en} · ${vi.jp}` : ''}`);
     // loadout carry-over: full HP, grenades topped up to the starting count
     const S = this.progress.stats;
     this.player.hp = S.maxHp;
@@ -127,6 +136,37 @@ export const GameSystems = {
     this._missionDone = false;
     this.audio.setEnvironment(m.area);
     this._refreshEnvActive();
+    this._placeCaches(m, anchors);
+    this.hud.setShield?.(0);
+  },
+
+  /** Supply caches that never expire: one at the entry (so nobody starts
+   *  a fight dry) and one mid-field at the anchor farthest from the entry
+   *  (a reason to push forward instead of camping the spawn). */
+  _placeCaches(m, anchors) {
+    const sp = m.spawn;
+    const free = (x, z) => !blockedAt(this.world, x, z, 0.5, 0, 1.8);
+    const near = (cx, cz, r) => {
+      for (let k = 0; k < 16; k++) {
+        const a = k * 2.4, x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+        if (free(x, z)) return { x, z };
+      }
+      return null;
+    };
+    const fwd = { x: -Math.sin(sp.yaw ?? 0), z: -Math.cos(sp.yaw ?? 0) };
+    const a = near(sp.x + fwd.x * 3 - fwd.z * 1.6, sp.z + fwd.z * 3 + fwd.x * 1.6, 0.6);
+    const b = near(sp.x + fwd.x * 3 + fwd.z * 1.6, sp.z + fwd.z * 3 - fwd.x * 1.6, 0.6);
+    if (a) this.pickups.spawn('ammo', a.x, 0, a.z, { keep: true });
+    if (b) this.pickups.spawn('medkit', b.x, 0, b.z, { keep: true });
+    const ground = anchors.filter((an) => !an.y);
+    if (!ground.length) return;
+    const far = ground.slice().sort((p, q) =>
+      Math.hypot(q.pos[0] - sp.x, q.pos[1] - sp.z) - Math.hypot(p.pos[0] - sp.x, p.pos[1] - sp.z));
+    const mid = far[Math.floor(far.length / 2)], deep = far[0];
+    const c = near(mid.pos[0], mid.pos[1], 1.6);
+    if (c) { this.pickups.spawn('ammo', c.x, 0, c.z, { keep: true }); this.pickups.spawn('medkit', c.x + 0.7, 0, c.z, { keep: true }); }
+    const d = near(deep.pos[0], deep.pos[1], 1.6);
+    if (d) { this.pickups.spawn('ammo', d.x, 0, d.z, { keep: true }); this.pickups.spawn('armor', d.x + 0.7, 0, d.z, { keep: true }); }
   },
 
   /** Layer the rolled variant over the mission's base atmosphere. */
@@ -177,6 +217,8 @@ export const GameSystems = {
   _updateSystems(dt, mctx, locked) {
     const S = this.progress.stats;
     const p = this.player;
+    this.director.update(dt);
+    this.hud.setShield?.(this.director.graceT / DIRECTOR.respawnGrace);
     // ---- buffs ----
     for (const k of ['overdrive', 'haste']) {
       if (this.buffs[k] > 0) {
@@ -228,13 +270,13 @@ export const GameSystems = {
     // ---- objective ----
     const res = this.objectives.update(dt, {
       playerPos: p.feet, enemyMgr: this.enemyMgr,
-      onIntel: (n) => this.hud.pickupToast(`◆ INTEL ${n}/3 RECOVERED · 情報回収${n === 3 ? ' — GET TO EXTRACTION' : ''}`),
+      onIntel: (n) => this.hud.pickupToast(`◆ INTEL ${n}/3 RECOVERED 情报已回收${n === 3 ? ' — GET TO EXTRACTION 前往撤离点' : ''}`),
     });
     const oi = this.objectives.hud(this.enemyMgr);
     this.hud.setObjective(oi);
     this._projectMarkers(oi.markers);
     if (res === 'complete' && !this._missionDone) this._missionComplete();
-    else if (res === 'failed' && !this._missionDone) this._missionFailed('THE TERMINAL WAS COMPROMISED · 端末喪失');
+    else if (res === 'failed' && !this._missionDone) this._missionFailed('THE TERMINAL WAS COMPROMISED · 终端失守');
 
     // ---- threats + boss + music ----
     _e.setFromQuaternion(this.camera.quaternion, 'YXZ');
@@ -320,6 +362,7 @@ export const GameSystems = {
       world: this.world, playerPos: this.player.position,
     });
     c.hitPoint = hitPoint;
+    c.director = this.director;
     c.headMult = this.progress.stats.headMul;
     c.envMeshes = this._losTargets ?? this.envMeshes;
     return c;
@@ -408,7 +451,9 @@ export const GameSystems = {
   _onEnemyKilled(enemy, headshot) {
     this.kills++;
     const S = this.progress.stats;
-    this.pickups.spawnFrom(enemy, { dropBonus: S.dropBonus });
+    const w = this.weapon.w;
+    const pity = this.director.pity(w.reserve / Math.max(1, this.weapon.magSize(w)), this.player.hp / S.maxHp);
+    this.pickups.spawnFrom(enemy, { dropBonus: S.dropBonus, pity });
     this.hud.killFeed(headshot);
     this.hud.setTargets(this.enemyMgr.remaining());
     this.enemyMgr.removeHitMeshes(enemy);
@@ -436,8 +481,10 @@ export const GameSystems = {
   /** n = raw damage; src: Enemy | { blast, pos } */
   _damagePlayer(n, src = null) {
     if (this.state !== 'playing' || this._missionDone) return;
+    if (this.director.shielded) return;              // redeploy grace
     const S = this.progress.stats;
     if (src?.blast) n *= S.blastResist;
+    if (src) n *= this.director.mercy();              // hostile fire softens after each death
     // armor plates soak most of the hit until they break
     if (this.armor > 0) {
       const soak = Math.min(this.armor, n * ARMOR.absorb);
@@ -455,14 +502,26 @@ export const GameSystems = {
       this.hud.damageFrom(Math.atan2(-dx, -dz) - _e.y);
     }
     const hp = this.player.damage(n);
-    if (hp <= 0) {
-      this.player.setSpawn(this._pickRespawnPoint());
-      this.player.hp = Math.min(S.maxHp, PLAYER.overrunHp + S.overrunBonus);
-      this.player.shake(0.03);
-      this.hud.showDowned();
-      this.hud.missionBanner();
-    }
+    if (hp <= 0) this._redeploy();
     this.hud.setHP(this.player.hp, S.maxHp);
+  },
+
+  /** Down: come back far from the enemy, shielded + unseen for a moment,
+   *  with the squad's trail on you broken and enough ammo to fight on. */
+  _redeploy() {
+    const S = this.progress.stats;
+    this.director.onPlayerDown();
+    this.enemyMgr.loseTrack();
+    this.explosives.clear();
+    this.player.setSpawn(this._pickRespawnPoint());
+    this.player.hp = Math.min(S.maxHp, PLAYER.overrunHp + S.overrunBonus);
+    // never redeploy dry: every owned weapon gets at least 2 magazines back
+    this.weapon.ensureReserve(2);
+    this.weapon.w.mag = this.weapon.magSize();
+    this._syncHudAmmo();
+    this.player.shake(0.03);
+    this.hud.showDowned();
+    this.audio.play('objective', { volume: 0.5, rate: 0.7 });
   },
 
   /** Grabbed a salvage drop. */
@@ -473,33 +532,33 @@ export const GameSystems = {
         const heal = Math.round(DROPS.medkitHp * S.medkitMul);
         this.player.hp = Math.min(S.maxHp, this.player.hp + heal);
         this.audio.play('medkit', { volume: 0.8 });
-        this.hud.pickupToast(`✚ +${heal} HP · 応急処置 MEDKIT`);
+        this.hud.pickupToast(`✚ +${heal} HP 医疗包 MEDKIT`);
         break;
       }
       case 'ammo':
-        this.weapon.addReserve(null, DROPS.ammoRounds);
+        this.weapon.addMags(DROPS.ammoMags);
         this._syncHudAmmo();
         this.audio.play('pickup', { volume: 0.8 });
-        this.hud.pickupToast(`▮ +${DROPS.ammoRounds} ROUNDS · 弾薬補給 AMMO`);
+        this.hud.pickupToast(`▮ +${Math.round(this.weapon.magSize() * DROPS.ammoMags)} ROUNDS 弹药补给 AMMO`);
         break;
       case 'armor':
         this.armor = Math.min(S.maxArmor, this.armor + DROPS.armorPts);
         this.audio.play('armorPickup', { volume: 0.8 });
-        this.hud.pickupToast(`◈ +${DROPS.armorPts} ARMOR · 防弾板`);
+        this.hud.pickupToast(`◈ +${DROPS.armorPts} ARMOR 护甲`);
         break;
       case 'grenade':
         if (this.grenades < S.grenadeMax) this.grenades++;
         this.audio.play('pickup', { volume: 0.8, rate: 0.8 });
-        this.hud.pickupToast(`⬣ FRAG GRENADE · 手榴弾 [G] (${this.grenades}/${S.grenadeMax})`);
+        this.hud.pickupToast(`⬣ FRAG GRENADE 破片手雷 [G] (${this.grenades}/${S.grenadeMax})`);
         break;
       case 'weapon': {
         const key = this.weapon.unlock();
         if (key) {
           const idx = WEAPON_ORDER.indexOf(key);
-          this.hud.pickupToast(`▲ NEW WEAPON: ${this.weapon.weapons[idx].def.label} · [${idx + 1}]`);
+          this.hud.pickupToast(`▲ NEW WEAPON 新武器: ${this.weapon.weapons[idx].def.label} ${this.weapon.weapons[idx].def.zh || ''} · [${idx + 1}]`);
         } else {
-          this.weapon.addReserve(null, DROPS.ammoRounds * 2);
-          this.hud.pickupToast('▲ WEAPON CRATE · FULL RESUPPLY 弾薬満載');
+          this.weapon.addMags(DROPS.ammoMags * 2);
+          this.hud.pickupToast('▲ WEAPON CRATE 武器箱 · FULL RESUPPLY 满弹药');
         }
         this.audio.play('weaponPickup', { volume: 0.9 });
         this._syncHudAmmo();
@@ -508,12 +567,12 @@ export const GameSystems = {
       case 'overdrive':
         this.buffs.overdrive = DROPS.buffTime;
         this.audio.play('powerup', { volume: 0.8 });
-        this.hud.pickupToast('◆ OVERDRIVE · +50% DAMAGE 火力増強');
+        this.hud.pickupToast('◆ OVERDRIVE +50% DAMAGE 火力增强');
         break;
       case 'haste':
         this.buffs.haste = DROPS.buffTime;
         this.audio.play('powerup', { volume: 0.8, rate: 1.25 });
-        this.hud.pickupToast('◆ HASTE · SPEED + FAST RELOAD 加速');
+        this.hud.pickupToast('◆ HASTE 急速 — SPEED + FAST RELOAD 移速/装填提升');
         break;
     }
   },
@@ -563,10 +622,10 @@ export const GameSystems = {
     while (S.unlockWeapon > 0) {
       S.unlockWeapon--;
       const k = this.weapon.unlock();
-      if (k) this.hud.pickupToast(`▲ ARMORY: ${this.weapon.weapons[WEAPON_ORDER.indexOf(k)].def.label} UNLOCKED`);
+      if (k) this.hud.pickupToast(`▲ ARMORY 武器库解锁: ${this.weapon.weapons[WEAPON_ORDER.indexOf(k)].def.label}`);
     }
     this.audio.play('powerup', { volume: 0.6 });
-    this.hud.pickupToast(`★ PERK: ${p.name} · ${p.jp}`);
+    this.hud.pickupToast(`★ PERK 天赋: ${p.name} · ${p.zh}`);
     this._offerPerks();
   },
 
@@ -614,6 +673,8 @@ export const GameSystems = {
   _enemyCtxExtras(c) {
     c.playerSpeed = Math.hypot(this.player.vel.x, this.player.vel.y);
     c.envMeshes = this._losTargets ?? this._envActive;
+    c.director = this.director;
+    c.playerHidden = this.director.playerHidden;
     if (c._extras) return;
     c._extras = true;
     c.throwGrenade = (from, to, opts) => this.explosives.throw(from, to, opts);
@@ -626,11 +687,33 @@ export const GameSystems = {
     };
     c.pushPlayer = (dx, dz) => this._pushPlayer(dx, dz);
     c.onBoss = (b) => {
-      this.hud.pickupToast('☠ COMMANDER ON SITE · 敵指揮官出現');
+      this.hud.pickupToast('☠ COMMANDER ON SITE 敌方指挥官现身');
       this.audio.play('alarm', { volume: 0.4 });
       void b;
     };
-    c.onBossHp = (f) => this.hud.setBoss('COMMANDER · 敵指揮官', f > 0 ? f : null);
+    c.onBossHp = (f) => this.hud.setBoss('COMMANDER · 敌方指挥官', f > 0 ? f : null);
+    c.onReinforce = () => { this._shotDirty = true; this.hud.setTargets(this.enemyMgr.remaining()); };
+    c.onBossBarrage = () => {
+      this.hud.pickupToast('⚠ GRENADE BARRAGE — MOVE! 榴弹齐射，快跑！');
+      this.audio.play('alarm', { volume: 0.3, rate: 1.3 });
+    };
+    // the commander calls escorts — command answers with a supply drop
+    // a few metres from the player (ammo + medkit, never expires)
+    c.onBossPhase = (phase) => {
+      const f = this.player.feet;
+      for (let k = 0; k < 12; k++) {
+        const a = rand(0, 6.28), x = f.x + Math.cos(a) * 4, z = f.z + Math.sin(a) * 4;
+        if (blockedAt(this.world, x, z, 0.5, f.y, 1.8)) continue;
+        this.pickups.spawn('ammo', x, f.y, z, { keep: true });
+        this.pickups.spawn('medkit', x + 0.6, f.y, z + 0.3, { keep: true });
+        break;
+      }
+      this.hud.pickupToast(phase === 2
+        ? '☠ COMMANDER ENRAGED 指挥官狂暴 · SUPPLY DROP 补给已投放'
+        : '☠ ESCORTS INBOUND 护卫增援 · SUPPLY DROP 补给已投放');
+      this.audio.play('alarm', { volume: 0.35 });
+      this._shotDirty = true;
+    };
     c.onHealed = () => {};
     c.onGrenadeThrown = () => {};
   },

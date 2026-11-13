@@ -82,6 +82,7 @@ export class PickupManager {
     this.drops = [];
     this._pool = {};
     this.mat = RMMaterial();
+    this.mat.userData.noDetail = true;      // drops spin: no world-space surface detail
     this.glow = GlowMaterial(2.4);
     this.geos = {};
     for (const k of DROP_KINDS) this.geos[k] = model(k);
@@ -133,8 +134,10 @@ export class PickupManager {
     const pos = enemy.group.position;
     const y = enemy.anchorY ?? 0;
     const roll = (c) => chance(Math.min(0.95, c));
-    if (roll(DROPS.ammoChance + bonus)) this.spawn('ammo', pos.x, y, pos.z);
-    if (roll(DROPS.medkitChance + bonus * 0.6)) this.spawn('medkit', pos.x, y, pos.z);
+    // pity overrides (director): running dry / badly hurt → near-certain
+    const pity = mods.pity ?? {};
+    if (roll(Math.max(DROPS.ammoChance + bonus, pity.ammo ?? 0))) this.spawn('ammo', pos.x, y, pos.z);
+    if (roll(Math.max(DROPS.medkitChance + bonus * 0.6, pity.medkit ?? 0))) this.spawn('medkit', pos.x, y, pos.z);
     if (roll(DROPS.armorChance + bonus * 0.5)) this.spawn('armor', pos.x, y, pos.z);
     if (roll(DROPS.grenadeChance + bonus * 0.4)) this.spawn('grenade', pos.x, y, pos.z);
     if (enemy.boss || roll(DROPS.weaponChance + bonus * 0.15)) this.spawn('weapon', pos.x, y, pos.z);
@@ -144,14 +147,15 @@ export class PickupManager {
     }
   }
 
-  spawn(kind, px, y, pz) {
+  /** opts.keep: a placed supply cache — exact spot, never expires. */
+  spawn(kind, px, y, pz, opts = {}) {
     const mesh = this._take(kind);
-    const x = px + rand(-0.55, 0.55);
-    const z = pz + rand(-0.55, 0.55);
+    const x = px + (opts.keep ? 0 : rand(-0.55, 0.55));
+    const z = pz + (opts.keep ? 0 : rand(-0.55, 0.55));
     mesh.position.set(x, y, z);
     mesh.userData.item.rotation.y = rand(0, 6.28);
     this.p.dustPuff(x, y + 0.1, z, 3);
-    this.drops.push({ kind, mesh, x, y, z, t: 0, bob: rand(0, 6.28) });
+    this.drops.push({ kind, mesh, x, y, z, t: 0, bob: rand(0, 6.28), keep: !!opts.keep });
   }
 
   /** Back-compat: drop at a world position (y = level). */
@@ -178,7 +182,7 @@ export class PickupManager {
         this._remove(i);
         continue;
       }
-      if (d.t > DROPS.lifetime) {
+      if (!d.keep && d.t > DROPS.lifetime) {
         d.mesh.visible = Math.floor(d.t * 6) % 2 === 0;
         if (d.t > DROPS.lifetime + 2) this._remove(i);
       }

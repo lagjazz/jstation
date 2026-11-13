@@ -1,0 +1,4 @@
+node_modules/
+coverage/
+tests/e2e/shots/
+.ruff_cache/

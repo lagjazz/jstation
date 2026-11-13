@@ -24,12 +24,17 @@ import { blockedAt } from './collision.js';
 import { clamp, rand } from './utils.js';
 
 const LABEL = {
-  eliminate: ['ELIMINATE', '殲滅'],
-  survive: ['SURVIVE', '持久'],
-  defend: ['DEFEND THE TERMINAL', '端末防衛'],
-  capture: ['CAPTURE THE UPLINK', '拠点確保'],
-  intel: ['RECOVER INTEL', '情報回収'],
-  assassinate: ['ASSASSINATE THE COMMANDER', '指揮官排除'],
+  eliminate: ['ELIMINATE ALL', 'HOSTILES', '全歼敌人'],
+  survive:   ['SURVIVE', 'HOLD OUT', '坚守'],
+  defend:    ['DEFEND TERMINAL', 'DEFEND', '保卫终端'],
+  capture:   ['CAPTURE THE UPLINK', 'UPLINK', '占领上传点'],
+  intel:     ['RECOVER INTEL', 'INTEL', '回收情报'],
+  assassinate: ['HUNT THE COMMANDER', 'TARGET', '猎杀指挥官'],
+  // secondary / mid-mission events
+  hold:      ['HOLD THE BREACH', 'BREACH', '守住缺口'],
+  escort:    ['ESCORT THE CONVOY', 'CONVOY', '护送车队'],
+  salvage:   ['SALVAGE THE POWER CORE', 'CORE', '回收动力核心'],
+  purge:     ['PURGE THE NEST', 'NEST', '清除巢穴'],
 };
 
 function terminalGeo() {
@@ -323,39 +328,39 @@ export class Objectives {
 
   /** HUD line + progress + waypoint markers (world positions). */
   hud(em) {
-    const [en, jp] = LABEL[this.type] ?? LABEL.eliminate;
-    const out = { title: `${en} · ${jp}`, detail: '', progress: null, markers: [], warn: false };
+    const [en, , zh] = LABEL[this.type] ?? LABEL.eliminate;
+    const out = { title: `${en} · ${zh}`, detail: '', progress: null, markers: [], warn: false };
     switch (this.type) {
-      case 'eliminate': out.detail = `HOSTILES ${em.remaining()}`; break;
+      case 'eliminate': out.detail = `HOSTILES 残敌 ${em.remaining()}`; break;
       case 'survive': {
         const left = Math.max(0, this.duration - this.t);
-        out.detail = `HOLD OUT ${Math.ceil(left)}s`;
+        out.detail = `HOLD OUT 坚守 ${Math.ceil(left)}s`;
         out.progress = clamp(this.t / this.duration, 0, 1);
         break;
       }
       case 'defend': {
         const left = Math.max(0, this.duration - this.t);
-        out.detail = `INTEGRITY ${Math.max(0, Math.ceil(this.termHp))}% · ${Math.ceil(left)}s`;
+        out.detail = `INTEGRITY 终端 ${Math.max(0, Math.ceil(this.termHp))}% · ${Math.ceil(left)}s`;
         out.progress = clamp(this.t / this.duration, 0, 1);
         out.warn = this._hackT > 0;
-        out.markers.push({ pos: this.terminal.position, label: 'DEFEND', color: '#ff9a40' });
+        out.markers.push({ pos: this.terminal.position, label: 'DEFEND 保卫', color: '#ff9a40' });
         break;
       }
       case 'capture':
-        out.detail = `UPLINK ${Math.floor(this.capture * 100)}%${this.contested ? ' · CONTESTED' : (this.inside ? ' · CAPTURING' : '')}`;
+        out.detail = `UPLINK ${Math.floor(this.capture * 100)}%${this.contested ? ' · CONTESTED 争夺中' : (this.inside ? ' · CAPTURING 占领中' : '')}`;
         out.progress = this.capture;
         out.warn = this.contested;
-        out.markers.push({ pos: this.zone.position, label: 'UPLINK', color: '#40e0ff' });
+        out.markers.push({ pos: this.zone.position, label: 'UPLINK 上传点', color: '#40e0ff' });
         break;
       case 'intel':
-        out.detail = this.extract ? 'REACH EXTRACTION' : `DRIVES ${this.got}/3`;
+        out.detail = this.extract ? 'REACH EXTRACTION 前往撤离点' : `DRIVES 情报 ${this.got}/3`;
         out.progress = this.got / 3;
-        for (const d of this.drives) if (!d.got) out.markers.push({ pos: d.g.position, label: 'INTEL', color: '#ffc040' });
-        if (this.extract) out.markers.push({ pos: new THREE.Vector3(this.extract.x, 0, this.extract.z), label: 'EXTRACT', color: '#40ff80' });
+        for (const d of this.drives) if (!d.got) out.markers.push({ pos: d.g.position, label: 'INTEL 情报', color: '#ffc040' });
+        if (this.extract) out.markers.push({ pos: new THREE.Vector3(this.extract.x, 0, this.extract.z), label: 'EXTRACT 撤离', color: '#40ff80' });
         break;
       case 'assassinate': {
         const b = em.boss;
-        out.detail = b ? 'COMMANDER ON SITE' : 'LOCATING…';
+        out.detail = b ? 'COMMANDER ON SITE 指挥官在场' : 'LOCATING… 搜索中';
         if (b && b.alive) out.markers.push({ pos: b.group.position, label: 'TARGET', color: '#ff3050' });
         break;
       }

@@ -20,13 +20,13 @@ const OUTDOOR_WET = new Set(['platform', 'garden', 'cyber', 'skyport', 'canopy',
 const INDOOR = new Set(['hall', 'moon', 'tomb', 'lab', 'aquarium', 'orbit']);
 
 export const VARIANT_INFO = {
-  clear:    { en: 'CLEAR', jp: '平常' },
-  fog:      { en: 'DENSE FOG', jp: '濃霧' },
+  clear:    { en: 'CLEAR', jp: '晴朗' },
+  fog:      { en: 'DENSE FOG', jp: '浓雾' },
   storm:    { en: 'THUNDERSTORM', jp: '雷雨' },
-  blackout: { en: 'POWER FAILURE', jp: '停電' },
-  alert:    { en: 'RED ALERT', jp: '警戒態勢' },
+  blackout: { en: 'POWER FAILURE', jp: '停电' },
+  alert:    { en: 'RED ALERT', jp: '红色警戒' },
   dusk:     { en: 'GOLDEN DUSK', jp: '黄昏' },
-  blizzard: { en: 'WHITEOUT', jp: '猛吹雪' },
+  blizzard: { en: 'WHITEOUT', jp: '暴风雪' },
 };
 
 export function rollVariant(area) {

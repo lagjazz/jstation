@@ -1,0 +1,16 @@
+{
+  "name": "jstation",
+  "private": true,
+  "type": "module",
+  "description": "Zero-build browser FPS (Three.js). The game itself has no runtime dependencies \u2014 devDependencies are for tests only.",
+  "scripts": {
+    "serve": "python3 -m http.server 8123 --bind 127.0.0.1",
+    "test": "node --test \"tests/unit/*.test.mjs\"",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='js/director.js' --test-coverage-include='js/arenaDress.js' --test-coverage-include='js/collision.js' --test-coverage-include='js/progression.js' --test-coverage-include='js/utils.js' --test-coverage-include='js/meshKit.js' --test-coverage-include='js/pickups.js' --test-coverage-include='js/objectives.js' --test-coverage-include='js/config.js' --test-coverage-include='js/surfaceDetail.js' --test-coverage-include='js/skyline.js' --test-coverage-lines=80 --test-coverage-functions=80 \"tests/unit/*.test.mjs\"",
+    "test:e2e": "node tests/e2e/campaign.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.48.2",
+    "three": "0.165.0"
+  }
+}

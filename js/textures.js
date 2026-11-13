@@ -147,7 +147,7 @@ function signCanvas(w, h, bg, draw) {
   return toTexture(c, { clamp: true });
 }
 
-const JP_FONT = '"Noto Sans JP","Yu Gothic","Hiragino Kaku Gothic ProN","Meiryo",sans-serif';
+const JP_FONT = '"Noto Sans JP","Noto Sans SC","Microsoft YaHei","Yu Gothic","Hiragino Kaku Gothic ProN","Meiryo",sans-serif';
 
 function makeHangingSign(main, sub, bg = '#1d4f9c', arrow = '→') {
   return signCanvas(512, 128, bg, (ctx) => {

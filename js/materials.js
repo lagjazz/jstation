@@ -26,6 +26,7 @@ export const MAT = {
         clearcoat: 0.35,
         clearcoatRoughness: 0.24,
       });
+      this._floor.userData.detailKind = 'tile';     // surfaceDetail.js: polished tiles, not poured concrete
     }
     return this._floor;
   },

@@ -102,6 +102,14 @@ const AREA_STYLE = {
   canopy: ['crate', 'stack', 'sandbag'], canyon: ['sandbag', 'stack', 'barrier'],
   aquarium: ['locker', 'crate', 'barrier'],
 };
+// hand-authored cover already structures these maps — fewer loose props
+// keeps them readable instead of cluttered
+const DENSITY = {
+  hall: 0.5, platform: 0.6, garden: 0.45,
+  // arenas with authored cover islands (js/arenaDress.js)
+  cyber: 0.5, moon: 0.5, tomb: 0.5, skyport: 0.5, lab: 0.5, atlantis: 0.5,
+  ice: 0.5, canopy: 0.5, canyon: 0.5, aquarium: 0.5,
+};
 // rotating floors / cargo lanes: no loose dressing
 const NO_PROPS = new Set(['clockwork', 'orbit']);
 
@@ -164,7 +172,7 @@ export class PropManager {
    * Dress the arena. rect = arena interior (null for station areas → use
    * anchors), anchors = spawn pool, avoid = [{x,z,r}] keep-out circles.
    */
-  setup(area, rect, anchors, avoid, density = 1) {
+  setup(area, rect, anchors, avoid, density = DENSITY[area] ?? 1) {
     this.clear();
     if (NO_PROPS.has(area)) return;
     const style = AREA_STYLE[area] ?? KINDS;
@@ -172,6 +180,8 @@ export class PropManager {
     const nBarrel = Math.round(rand(3, 5) * density);
     const keep = avoid.slice();
     for (const a of anchors) keep.push({ x: a.pos[0], z: a.pos[1], r: 2.2 });
+    // patrol waypoints stay walkable too (a crate on a waypoint pins a patrol)
+    for (const a of anchors) for (const w of a.wps ?? []) keep.push({ x: w[0], z: w[1], r: 1.5 });
     const spot = () => {
       for (let k = 0; k < 40; k++) {
         let x, z;

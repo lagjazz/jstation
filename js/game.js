@@ -25,6 +25,12 @@ import { Station } from './station.js';
 import { Store } from './store.js';
 import { Platform } from './platform.js';
 import { Sakura } from './sakura.js';
+import { Garden } from './garden.js';
+import { HallDress } from './hallDress.js';
+import { ArenaDress } from './arenaDress.js';
+import { Skyline } from './skyline.js';
+import { StationArch } from './stationArch.js';
+import { applySurfaceDetail } from './surfaceDetail.js';
 import { NewAreas, THEME_BG } from './newAreas.js';
 import { NewAreas2, THEME_BG2 } from './newAreas2.js';
 import { NewAreas3 } from './newAreas3.js';
@@ -32,7 +38,8 @@ import { PickupManager, DROP_KINDS } from './pickups.js';
 import { Train } from './train.js';
 import { WeaponController } from './weapon.js';
 import { Player } from './player.js';
-import { Enemy, EnemyManager } from './enemy.js';
+import { Enemy, EnemyManager, SPAWN_POOLS } from './enemy.js';
+import { pickSafest } from './director.js';
 import { ParticleManager } from './particleManager.js';
 import { HUD } from './hud.js';
 import './hudExtras.js';
@@ -150,6 +157,7 @@ export class Game {
         }
         this.envMeshes.push(...mgr.raycastMeshes);
       }
+      this._buildArenaDress();
       this.pickups = new PickupManager(this.scene, this.particles);
       this._initSystems();
       // MISSIONS[0] is the station. Boot never runs _setupMission, so without
@@ -180,6 +188,7 @@ export class Game {
       await this.audio.prepare();   // synth + file fetch here, not on the start click
 
       this._applyBumpDetail();
+      this._applySurfaceDetail();
       this.weapon.stats = this.progress.stats;
       await stage(98, 'Final self-check');
       await this._finalChecks();
@@ -267,6 +276,16 @@ export class Game {
       new THREE.Vector2(window.innerWidth, window.innerHeight),
       p.bloomStrength, 0.55, 0.82,
     );
+    // Clamp what the bloom high-pass may pick up. A point light mirrored in
+    // a glossy floor / the pond is a few pixels of HDR 50+ — unclamped, the
+    // blur turns each one into a screen-filling orange blob. Emissive glow
+    // (≈2.5) still blooms; specular fireflies no longer do.
+    const hp = this.bloomPass.materialHighPassFilter;
+    const texelLine = 'vec4 texel = texture2D( tDiffuse, vUv );';
+    if (hp?.fragmentShader.includes(texelLine)) {
+      hp.fragmentShader = hp.fragmentShader.replace(texelLine, `${texelLine}\n\ttexel.rgb = min( texel.rgb, vec3( 2.0 ) );`);
+      hp.needsUpdate = true;
+    }
     this.composer.addPass(this.bloomPass);
     this.composer.addPass(new OutputPass());
     this.gradePass = createGradePass();
@@ -300,7 +319,7 @@ export class Game {
     this.moon = this.station.moon;
     this.moon.castShadow = p.shadows;
     this.moon.shadow.mapSize.set(p.shadowSize, p.shadowSize);
-    Object.assign(this.moon.shadow.camera, { left: -52, right: 20, top: 26, bottom: -32, near: 10, far: 180 });
+    Object.assign(this.moon.shadow.camera, { left: -62, right: 52, top: 40, bottom: -46, near: 10, far: 220 });
     this.moon.shadow.bias = -0.0004;
     this.moon.shadow.normalBias = 0.05;
     this.moon.shadow.camera.updateProjectionMatrix();
@@ -308,8 +327,10 @@ export class Game {
 
   _buildPlatform() {
     this.platform = new Platform(this.scene, this.world);
-    this.platform.cityDetail = this._preset().cityDetail;   // skyline density per preset
     this.platform.build();
+    this.skyline = new Skyline(this.scene);
+    this.skyline.build(this._preset().cityDetail);          // skyline density per preset
+    this.platform.cityGroup = this.skyline.group;
     this.envMeshes.push(...this.platform.raycastMeshes);
     for (const pnl of this.platform.panels) pnl.userData.shatter = true;
   }
@@ -323,8 +344,83 @@ export class Game {
   }
 
   _buildSakura() {
+    this.hallDress = new HallDress(this.scene, this.world);
+    this.hallDress.build();
+    this.stationArch = new StationArch(this.scene);
+    this.stationArch.build();
+    this.envMeshes.push(...this.hallDress.raycastMeshes);
+    this.garden = new Garden(this.scene, this.world);
+    this.garden.build();
+    this.envMeshes.push(...this.garden.raycastMeshes);
     this.sakura = new Sakura(this.scene, this._preset().particleScale);
     this.sakura.build();
+  }
+
+  /** PBR surface detail on every building material (js/surfaceDetail.js).
+   *  Anything that moves gets the object-space variant: movers are found
+   *  by stepping the world updaters once and comparing world matrices. */
+  _applySurfaceDetail() {
+    if (this.qualityName === 'LOW') return;
+    const actors = new Set(this.enemyMgr.enemies.map((e) => e.group));
+    const before = new Map();
+    const movers = new Set();
+    this.scene.updateMatrixWorld(true);
+    this.scene.traverse((o) => { if (o.isMesh) before.set(o, o.matrixWorld.elements.slice(12, 15).concat(o.matrixWorld.elements.slice(0, 3))); });
+    // compare after EVERY step: periodic movers (the orbit cargo train idles
+    // 12 s, runs, and parks again) would look static in an end-only check
+    const sample = () => {
+      this.scene.updateMatrixWorld(true);
+      for (const [o, m0] of before) {
+        if (movers.has(o)) continue;
+        const e = o.matrixWorld.elements;
+        const d = Math.abs(e[12] - m0[0]) + Math.abs(e[13] - m0[1]) + Math.abs(e[14] - m0[2]) +
+          Math.abs(e[0] - m0[3]) + Math.abs(e[1] - m0[4]) + Math.abs(e[2] - m0[5]);
+        if (d > 1e-4) movers.add(o);
+      }
+    };
+    const stub = {
+      feet: new THREE.Vector3(1e6, 0, 1e6), damage() {}, respawnPlayer() {}, shake() {}, flash() {},
+      particles: this.particles, audio: this.audio,
+    };
+    try {
+      for (let i = 0; i < 26; i++) {            // ≈ 21 s of world time
+        this.newAreas.update(0.8, stub); this.newAreas2.update(0.8, stub); this.newAreas3.update(0.8, stub);
+        this.station.update(0.8, 1 + i); this.platform.update(0.8);
+        sample();
+      }
+    } catch (err) {
+      console.warn('[detail] mover probe failed, falling back to world space', err);
+    }
+    sample();
+    const inTrain = (o) => { for (let p = o; p; p = p.parent) if (p === this.train?.group) return true; return false; };
+    const res = applySurfaceDetail(this.scene, {
+      skip: (o) => o === this.camera || actors.has(o) || o.isSprite || o.isPoints || o.isLine,
+      moving: (o) => movers.has(o) || inTrain(o),
+    });
+    console.log(`[detail] surface detail on ${res.patched} materials (${movers.size} moving meshes)`, res.byKind);
+  }
+
+  /** Structured cover for the twelve arena worlds (js/arenaDress.js): a
+   *  stable layout per arena, kept clear of each world's own mechanics
+   *  (vents, quicksand, current jets, bounce pads, turning gears, the
+   *  cargo-train lane). */
+  _buildArenaDress() {
+    this.arenaDress = new ArenaDress(this.scene, this.world);
+    const circles = [
+      ...this.newAreas.vents, ...this.newAreas.quicksand, ...this.newAreas.currents,
+      ...this.newAreas2.bouncePads, ...this.newAreas3.gearSpin, ...this.newAreas3.hazards,
+    ].map((c) => ({ x: c.x, z: c.z, r: c.r ?? 1.5 }));
+    const lanes = { orbit: [{ x0: 110, x1: 182, z0: 61.5, z1: 66.5 }] };
+    for (const m of MISSIONS) {
+      if (STATION_AREAS.has(m.area)) continue;
+      const rect = this.newAreas.bounds[m.area] ?? this.newAreas2.bounds[m.area] ?? this.newAreas3.bounds[m.area];
+      if (!rect) continue;
+      const layout = this.arenaDress.build(m.area, {
+        rect, spawn: m.spawn, anchors: SPAWN_POOLS[m.area] ?? [], avoid: circles, rects: lanes[m.area] ?? [],
+      });
+      console.log(`[dress] ${m.area}: ${layout.length} cover islands`);
+    }
+    this.envMeshes.push(...this.arenaDress.raycastMeshes);
   }
 
   /** Show only the current mission's themed world (station missions hide all
@@ -336,6 +432,7 @@ export class Game {
     this.newAreas.setVisible(area);
     this.newAreas2.setVisible(area);
     this.newAreas3.setVisible(area);
+    this.arenaDress?.setVisible(area);
     if (this.platform?.cityGroup) {
       this.platform.cityGroup.visible = STATION_AREAS.has(area) || area === 'cyber';
     }
@@ -687,7 +784,7 @@ export class Game {
       const stepEl = document.getElementById('l-step');
       loadEl.classList.remove('hidden');
       barEl.style.width = '60%';
-      stepEl.textContent = `Recompiling shaders for ${q} · 再コンパイル中…`;
+      stepEl.textContent = `Recompiling shaders for ${q} 正在重编译着色器…`;
       await this._prewarmMaterials();
       barEl.style.width = '100%';
       loadEl.classList.add('hidden');
@@ -695,7 +792,7 @@ export class Game {
     this.hud.show();
     this.hud.setMission(this._mission());
     this.hud.setWave(this.enemyMgr.waveInfo());
-    this.hud.setWeaponName(this.weapon.w.def.label);
+    this.hud.setWeaponName(this.weapon.w.def.label + ' ' + (this.weapon.w.def.zh || ''));
     this.hud.setTargets(this.enemyMgr.remaining());
     this.hud.setAmmo(this.weapon.w.mag, this.weapon.w.reserve);
     this.hud.setHP(this.player.hp);
@@ -747,6 +844,7 @@ export class Game {
   }
 
   restart() {
+    this._attempts = {};          // a new run plays the authored objectives again
     this.hud.hideVictory();
     clearTimeout(this._interTO);
     this._advancePending = false;
@@ -774,7 +872,7 @@ export class Game {
     this.player.setSpawn(m.spawn);
     this.player.missionTime = 0;
     this.weapon.reset(false);
-    this.hud.setWeaponName(this.weapon.w.def.label);
+    this.hud.setWeaponName(this.weapon.w.def.label + ' ' + (this.weapon.w.def.zh || ''));
     this.hud.setAmmo(this.weapon.w.mag, this.weapon.w.reserve);
     this.enemyMgr.resetRecallClock();
     this.pickups.clear();
@@ -894,6 +992,12 @@ export class Game {
     this.camera.far = at.farClip ?? Math.max(150, (at.fogFar ?? 230) + 90);
     this.camera.updateProjectionMatrix();
     if (this.moon) this.moon.intensity = at.moon ?? 0.8;
+    // sky fill: open-air maps (the garden) lift it so moonlit ground reads
+    if (this.station?.hemi) {
+      this.station.hemi.intensity = at.hemi ?? 0.55;
+      this.station.hemi.color.set(at.hemiSky ?? 0x223052);
+      this.station.hemi.groundColor.set(at.hemiGround ?? 0x0a0c11);
+    }
     // Themed equirect background (THEME_BG) for the twelve new worlds;
     // station missions keep the env-mapped night sky.
     if (this._bgStation === undefined) {
@@ -932,7 +1036,7 @@ export class Game {
       this.moon.shadow.mapSize.set(p.shadowSize, p.shadowSize);
     }
     // extra lights + materials
-    for (const l of [...(this.station?.qualityLights ?? []), ...(this.platform?.qualityLights ?? []), ...(this.store?.qualityLights ?? [])]) {
+    for (const l of [...(this.station?.qualityLights ?? []), ...(this.platform?.qualityLights ?? []), ...(this.store?.qualityLights ?? []), ...(this.garden?.qualityLights ?? [])]) {
       l.visible = name !== 'LOW';
     }
     // Light budget follows the preset. This is the one place the pool resizes,
@@ -1184,33 +1288,37 @@ export class Game {
     this.hud.targetPips?.(rel);
   }
 
-  /** Random safe redeploy point: open ground inside the arena bounds,
-   *  >=16 m from every live hostile when findable, facing arena center.
-   *  Falls back to the mission spawn if nothing clears. */
+  /** Safe redeploy point: the spot farthest from every live hostile among
+   *  the mission entry, the arena's (known-walkable) ground anchors and —
+   *  in walled arenas — random open floor. Faces the enemy's centre of
+   *  mass so the player comes back oriented. */
   _pickRespawnPoint() {
     const m = this._mission();
     const b = this._arenaRect;
-    if (!b) return { ...m.spawn };
     const world = this.player.world || this.world;
     const solid = (x, z) => blockedAt(world, x, z, 0.5, 0, 2.0);
-    const live = this.enemyMgr.enemies.filter((e) => e.state !== 'DEAD');
-    const pad = 2.5;
-    if (b.x1 - b.x0 < pad * 3 || b.z1 - b.z0 < pad * 3) return { ...m.spawn };
-    let best = null, bestD = -1;
-    for (let i = 0; i < 48; i++) {
-      const x = b.x0 + pad + Math.random() * (b.x1 - b.x0 - pad * 2);
-      const z = b.z0 + pad + Math.random() * (b.z1 - b.z0 - pad * 2);
-      if (solid(x, z)) continue;
-      let d = 1e9;
-      for (const e of live)
-        d = Math.min(d, Math.hypot(e.group.position.x - x, e.group.position.z - z));
-      if (d >= 16) { best = { x, z }; break; }
-      if (d > bestD) { bestD = d; best = { x, z }; }
+    const live = this.enemyMgr.enemies.filter((e) => e.state !== 'DEAD').map((e) => e.group.position);
+    const cands = [{ x: m.spawn.x, z: m.spawn.z, yaw: m.spawn.yaw }];
+    const pool = (SPAWN_POOLS[m.area] ?? []).filter((a) => !a.y);
+    for (const a of pool.slice().sort(() => Math.random() - 0.5)) {
+      if (!solid(a.pos[0], a.pos[1])) cands.push({ x: a.pos[0], z: a.pos[1] });
     }
-    if (!best) return { ...m.spawn };
-    const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
-    best.yaw = Math.atan2(-(cx - best.x), -(cz - best.z));
-    return best;
+    if (b && !this._mods?.fallKill) {
+      const pad = 2.5;
+      for (let i = 0; i < 24; i++) {
+        const x = b.x0 + pad + Math.random() * (b.x1 - b.x0 - pad * 2);
+        const z = b.z0 + pad + Math.random() * (b.z1 - b.z0 - pad * 2);
+        if (!solid(x, z)) cands.push({ x, z });
+      }
+    }
+    const best = pickSafest(cands, live) ?? cands[0];
+    if (live.length) {
+      let cx = 0, cz = 0;
+      for (const p of live) { cx += p.x; cz += p.z; }
+      cx /= live.length; cz /= live.length;
+      return { x: best.x, z: best.z, yaw: Math.atan2(-(cx - best.x), -(cz - best.z)) };
+    }
+    return { x: best.x, z: best.z, yaw: best.yaw ?? m.spawn.yaw ?? 0 };
   }
 
   _slowmo(cfg) { this.slow.t = cfg.duration; this.slow.scale = cfg.scale; }
@@ -1447,7 +1555,7 @@ export class Game {
         this._shotDirty = true;
       },
       onRecall: () => {
-        this.hud.pickupToast('⚠ LAST CONTACT REDIRECTED · 久未接敌的敌人已被重新部署到你附近');
+        this.hud.pickupToast('⚠ LAST CONTACT REDIRECTED 久未接敌的敌人已被重新部署到你附近');
         this.audio.play('enemyGrunt', { volume: 0.8 });
       },
     };
@@ -1596,7 +1704,7 @@ export class Game {
 
     // weapon switch reload HUD
     this._syncHudAmmo();
-    this.hud.setWeaponName(this.weapon.w.def.label);
+    this.hud.setWeaponName(this.weapon.w.def.label + ' ' + (this.weapon.w.def.zh || ''));
   }
 
   _debug(dtReal) {
